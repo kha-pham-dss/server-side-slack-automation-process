@@ -1,11 +1,12 @@
 /**
  * PostMenu Lambda (9:30 UTC).
- * Fetches dishes from API, posts to Slack, stores message_ts in DynamoDB.
+ * Fetches dishes from Google Sheet (dish-range), posts to Slack, stores message_ts in DynamoDB.
  */
 
 import { SSMClient, GetParametersByPathCommand } from '@aws-sdk/client-ssm';
 import { DynamoDBClient, PutItemCommand } from '@aws-sdk/client-dynamodb';
 import { marshall } from '@aws-sdk/util-dynamodb';
+import { google } from 'googleapis';
 
 const ssm = new SSMClient();
 const dynamo = new DynamoDBClient();
@@ -38,39 +39,71 @@ async function getConfig() {
   return map;
 }
 
-/**
- * GET dishes API → { dishes: [ { id: "0", name: "Dish A" }, ... ] }
- */
-async function fetchDishes(dishesApiUrl) {
-  const res = await fetch(dishesApiUrl);
-  if (!res.ok) throw new Error(`Dishes API error: ${res.status} ${await res.text()}`);
-  const data = await res.json();
-  const dishes = data.dishes ?? [];
-  return Array.isArray(dishes) ? dishes : [];
+function getSheetsClient(credentialsJson) {
+  const cred = JSON.parse(credentialsJson);
+  const auth = new google.auth.GoogleAuth({
+    credentials: cred,
+    scopes: ['https://www.googleapis.com/auth/spreadsheets.readonly'],
+  });
+  return google.sheets({ version: 'v4', auth });
 }
 
+/**
+ * Read dishes from Google Sheet (specific sheet tab + range, e.g. N4:N8).
+ * Returns [ { id: "0", name: "Dish A" }, ... ] (id = 0-based index).
+ */
+async function fetchDishesFromSheet(sheets, spreadsheetId, sheetName, rangeSpec) {
+  const quoted = /[\s']/.test(sheetName) ? `'${sheetName.replace(/'/g, "''")}'` : sheetName;
+  const range = `${quoted}!${rangeSpec}`;
+  const res = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range,
+  });
+  const rows = res.data.values || [];
+  const dishes = [];
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    const name = row?.[0] != null ? String(row[0]).trim() : '';
+    if (!name) continue;
+    dishes.push({ id: String(i), name });
+  }
+  return dishes;
+}
+
+const DIGIT_EMOJI = ['one', 'two', 'three', 'four', 'five', 'six'];
+const MAX_DISHES = 6;
+
 function buildSlackBlocks(dishes) {
-  const blocks = [
-    { type: 'header', text: { type: 'plain_text', text: "Today's menu", emoji: true } },
-    { type: 'divider' },
-  ];
-  for (let i = 0; i < dishes.length; i++) {
-    const d = dishes[i];
+  const shown = dishes.slice(0, MAX_DISHES);
+  const menuLines = shown.map((d, i) => {
     const name = typeof d === 'object' && d != null && 'name' in d ? d.name : String(d);
-    const emoji = `number${i}`;
-    blocks.push({
+    const emoji = DIGIT_EMOJI[i];
+    return `:${emoji}: (${name})`;
+  });
+  const blocks = [
+    { type: 'header', text: { type: 'plain_text', text: 'Thực đơn hôm nay:', emoji: true } },
+    { type: 'divider' },
+    {
       type: 'section',
       text: {
         type: 'mrkdwn',
-        text: `React with :${emoji}: for *${name}*`,
+        text: menuLines.join('\n'),
       },
-    });
-  }
+    },
+    { type: 'divider' },
+    {
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: ':up: để upsize lên 40k',
+      },
+    },
+  ];
   return blocks;
 }
 
 function buildSlackTextFallback(dishes) {
-  return "Today's menu: " + dishes.map((d, i) => (typeof d === 'object' && d?.name ? d.name : d)).join(', ');
+  return 'Thực đơn hôm nay: ' + dishes.map((d, i) => (typeof d === 'object' && d?.name ? d.name : d)).join(', ') + ' — :up: để upsize lên 40k';
 }
 
 /**
@@ -120,6 +153,31 @@ async function postToSlack(config, blocks, text) {
 }
 
 /**
+ * Thêm reaction vào message (cần bot token + scope reactions:write).
+ * emojiNames: ['one', 'two', ..., 'up'] (không có dấu hai chấm).
+ */
+async function addReactionsToMessage(botToken, channelId, messageTs, emojiNames) {
+  for (const name of emojiNames) {
+    const res = await fetch('https://slack.com/api/reactions.add', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json; charset=utf-8',
+        Authorization: `Bearer ${botToken}`,
+      },
+      body: JSON.stringify({
+        channel: channelId,
+        timestamp: messageTs,
+        name,
+      }),
+    });
+    const data = await res.json();
+    if (!data.ok) {
+      console.warn('reactions.add failed for', name, data.error);
+    }
+  }
+}
+
+/**
  * Store today's menu message in DynamoDB.
  */
 function dateKey() {
@@ -146,18 +204,33 @@ export async function handler(event) {
 
   try {
     const config = await getConfig();
-    const dishesApiUrl = config['dishes-api-url'];
-    if (!dishesApiUrl) throw new Error('Missing dishes-api-url in Parameter Store');
+    let dishes;
 
-    const dishes = await fetchDishes(dishesApiUrl);
+    const sheetId = config['sheet-id'];
+    const credentials = config['sheet-credentials'];
+    if (sheetId && credentials) {
+      const sheetName = config['dishes-sheet-name'] || 'Dishes';
+      const dishesRange = config['dishes-range'] || 'N3:N8';
+      const sheets = getSheetsClient(credentials);
+      dishes = await fetchDishesFromSheet(sheets, sheetId, sheetName, dishesRange);
+    } else {
+      throw new Error('Missing sheet-id or sheet-credentials in Parameter Store');
+    }
     const blocks = buildSlackBlocks(dishes);
     const text = buildSlackTextFallback(dishes);
+    const shownCount = Math.min(dishes.length, MAX_DISHES);
 
     const { channel_id, message_ts } = await postToSlack(config, blocks, text);
-    await storeMenuMessage(channel_id, message_ts, dishes.length);
+    await storeMenuMessage(channel_id, message_ts, shownCount);
+
+    const botToken = config['bot-token'];
+    if (botToken) {
+      const reactionNames = [...DIGIT_EMOJI.slice(0, shownCount), 'up'];
+      await addReactionsToMessage(botToken, channel_id, message_ts, reactionNames);
+    }
 
     console.log('Posted menu to channel', channel_id, 'message_ts', message_ts);
-    return { ok: true, channel_id, message_ts, dish_count: dishes.length };
+    return { ok: true, channel_id, message_ts, dish_count: shownCount };
   } catch (err) {
     console.error('PostMenu error:', err);
     throw err;

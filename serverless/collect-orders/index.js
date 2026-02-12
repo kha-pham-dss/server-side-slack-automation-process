@@ -1,11 +1,13 @@
 /**
- * CollectOrders Lambda (10:20 UTC) – Option A.
- * Reads today's menu message from DynamoDB, calls Slack reactions.get, aggregates, POSTs to order API.
+ * CollectOrders Lambda (10:20 UTC).
+ * Reads today's menu message from DynamoDB, calls Slack reactions.get, resolves user_id → user name
+ * via Slack users.list, then writes each user's order into the Google Sheet (user rows).
  */
 
 import { SSMClient, GetParametersByPathCommand } from '@aws-sdk/client-ssm';
 import { DynamoDBClient, GetItemCommand } from '@aws-sdk/client-dynamodb';
 import { unmarshall } from '@aws-sdk/util-dynamodb';
+import { google } from 'googleapis';
 
 const ssm = new SSMClient();
 const dynamo = new DynamoDBClient();
@@ -54,8 +56,22 @@ async function getTodayMenuMessage() {
   return unmarshall(res.Item);
 }
 
+const DIGIT_EMOJI = ['one', 'two', 'three', 'four', 'five', 'six'];
+const UP_EMOJI = 'up';
+
+/** Lấy bot user ID (để bỏ qua reaction của chính bot). */
+async function getBotUserId(botToken) {
+  const res = await fetch('https://slack.com/api/auth.test', {
+    headers: { Authorization: `Bearer ${botToken}` },
+  });
+  const data = await res.json();
+  if (!data.ok) return null;
+  return data.user_id ?? null;
+}
+
 /**
- * Slack API reactions.get → aggregate by emoji (number0, number1, ...) → user_ids.
+ * Slack API reactions.get → orders (:one:..:six:) + set user_ids react :up:.
+ * Bỏ qua reaction của bot. Returns { orders, upUserIds }.
  */
 async function getReactions(botToken, channelId, messageTs) {
   const url = new URL('https://slack.com/api/reactions.get');
@@ -68,32 +84,206 @@ async function getReactions(botToken, channelId, messageTs) {
   const data = await res.json();
   if (!data.ok) throw new Error(`Slack reactions.get error: ${data.error ?? res.status}`);
 
+  const botUserId = await getBotUserId(botToken);
+  const excludeBot = (ids) => (botUserId ? ids.filter((id) => id !== botUserId) : ids);
+
   const message = data.message;
   const reactions = message?.reactions ?? [];
-  /** @type {Array<{ emoji: string; user_ids: string[] }>} */
+  /** @type {Array<{ emoji: string; dish_index: number; user_ids: string[] }>} */
   const orders = [];
+  /** @type {Set<string>} */
+  const upUserIds = new Set();
   for (const r of reactions) {
     const name = r.name;
-    if (typeof name !== 'string' || !name.startsWith('number')) continue;
-    const num = parseInt(name.replace('number', ''), 10);
-    if (Number.isNaN(num) || num < 0) continue;
-    const users = r.users ?? [];
-    orders.push({ emoji: name, dish_index: num, user_ids: users });
+    if (typeof name !== 'string') continue;
+    const users = excludeBot(r.users ?? []);
+    if (name === UP_EMOJI) {
+      users.forEach((id) => upUserIds.add(id));
+      continue;
+    }
+    const idx = DIGIT_EMOJI.indexOf(name);
+    if (idx < 0) continue;
+    orders.push({ emoji: name, dish_index: idx, user_ids: users });
   }
-  return orders;
+  return { orders, upUserIds };
 }
 
 /**
- * POST to ordering API: { message_ts, orders: [ { dish_index, emoji, user_ids }, ... ] }
+ * Resolve Slack user IDs to display names. Uses users.list (one call).
+ * Requires bot scope: users:read
+ * @returns {Promise<Record<string, string>>} userId -> real_name (or display_name)
  */
-async function postOrders(orderApiUrl, messageTs, orders) {
-  const body = JSON.stringify({ message_ts: messageTs, orders });
-  const res = await fetch(orderApiUrl, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body,
+async function resolveUserIdsToNames(botToken) {
+  const res = await fetch('https://slack.com/api/users.list', {
+    headers: { Authorization: `Bearer ${botToken}` },
   });
-  if (!res.ok) throw new Error(`Order API error: ${res.status} ${await res.text()}`);
+  const data = await res.json();
+  if (!data.ok) throw new Error(`Slack users.list error: ${data.error ?? res.status}`);
+
+  const map = {};
+  for (const m of data.members ?? []) {
+    if (!m.id || m.is_bot) continue;
+    const name = m.real_name?.trim() || m.profile?.display_name?.trim() || m.name || m.id;
+    map[m.id] = name;
+  }
+  return map;
+}
+
+function getSheetsClient(credentialsJson) {
+  const cred = JSON.parse(credentialsJson);
+  const auth = new google.auth.GoogleAuth({
+    credentials: cred,
+    scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+  });
+  return google.sheets({ version: 'v4', auth });
+}
+
+/**
+ * Read dishes from sheet (same config as PostMenu). Returns [ { id: "0", name: "Dish A" }, ... ].
+ */
+async function fetchDishesFromSheet(sheets, spreadsheetId, sheetName, rangeSpec) {
+  const quoted = /[\s']/.test(sheetName) ? `'${sheetName.replace(/'/g, "''")}'` : sheetName;
+  const range = `${quoted}!${rangeSpec}`;
+  const res = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range,
+  });
+  const rows = res.data.values || [];
+  const dishes = [];
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    const name = row?.[0] != null ? String(row[0]).trim() : '';
+    if (!name) continue;
+    dishes.push({ id: String(i), name });
+  }
+  return dishes;
+}
+
+/**
+ * Build map: userName -> { dishNumber (1-based), price }.
+ * User nào react :up: thì price = upPrice (40k), còn lại defaultPrice (35k).
+ */
+function buildOrdersByUserName(orders, userIdToName, dishes, defaultPrice = 35000, upUserIds = new Set(), upPrice = 40000) {
+  /** @type {Record<string, number[]>} */
+  const userToDishIndices = {};
+  for (const o of orders) {
+    for (const uid of o.user_ids) {
+      if (!userToDishIndices[uid]) userToDishIndices[uid] = [];
+      userToDishIndices[uid].push(o.dish_index);
+    }
+  }
+  /** @type {Record<string, { dishNumber: number; price: number }>} */
+  const ordersByUserName = {};
+  for (const [uid, indices] of Object.entries(userToDishIndices)) {
+    const name = userIdToName[uid] ?? uid;
+    const sorted = [...indices].sort((a, b) => a - b);
+    const firstDishIndex = sorted[0];
+    const price = upUserIds.has(uid) ? upPrice : defaultPrice;
+    ordersByUserName[name] = {
+      dishNumber: firstDishIndex + 1,
+      price,
+    };
+  }
+  return ordersByUserName;
+}
+
+/** Chuyển cột 1-based sang chữ (1=A, 2=B, ..., 27=AA). */
+function sheetColumnToLetter(oneBased) {
+  if (oneBased <= 0) return '';
+  let n = oneBased;
+  let s = '';
+  while (n > 0) {
+    n--;
+    s = String.fromCharCode(65 + (n % 26)) + s;
+    n = Math.floor(n / 26);
+  }
+  return s;
+}
+
+/**
+ * Cột order: từ cột B, mỗi ngày = 2 cột (số món, giá). Hàng 12: 2 ô merge = ngày (1-31).
+ * Tìm block cho ngày hôm nay; ghi số món (1-based) và giá (mặc định 35000) vào từng hàng user.
+ */
+async function writeOrdersToSheet(sheets, spreadsheetId, ordersSheetName, ordersUserRange, ordersDateRow, ordersColumnStart, ordersDefaultPrice, ordersMaxDays, ordersByUserName) {
+  const quoted = /[\s']/.test(ordersSheetName) ? `'${ordersSheetName.replace(/'/g, "''")}'` : ordersSheetName;
+  const userRange = `${quoted}!${ordersUserRange}`;
+  const res = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: userRange,
+  });
+  const userRows = res.data.values || [];
+  if (userRows.length === 0) {
+    console.warn('Orders sheet user range is empty:', userRange);
+    return;
+  }
+
+  const match = ordersUserRange.match(/^([A-Z]+)(\d+):([A-Z]+)(\d+)$/i) || ordersUserRange.match(/^([A-Z]+)(\d+)$/i);
+  const startRow = match ? parseInt(match[2], 10) : 15;
+  const todayDay = new Date().getDate();
+
+  let startCol1Based = 2;
+  const colStr = ordersColumnStart.toUpperCase();
+  if (colStr.length === 1) {
+    startCol1Based = colStr.charCodeAt(0) - 64;
+  } else {
+    startCol1Based = (colStr.charCodeAt(0) - 64) * 26 + (colStr.charCodeAt(1) - 64);
+  }
+
+  const numCols = ordersMaxDays * 2;
+  const endCol1Based = startCol1Based + numCols - 1;
+  const dateRange = `${quoted}!${sheetColumnToLetter(startCol1Based)}${ordersDateRow}:${sheetColumnToLetter(endCol1Based)}${ordersDateRow}`;
+  const dateRes = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: dateRange,
+  });
+  const dateRowValues = (dateRes.data.values || [])[0] || [];
+
+  let pairIndex = -1;
+  for (let i = 0; i < ordersMaxDays; i++) {
+    const cell = dateRowValues[2 * i];
+    const val = cell != null ? Number(String(cell).trim()) : NaN;
+    if (val === todayDay) {
+      pairIndex = i;
+      break;
+    }
+  }
+  if (pairIndex < 0) {
+    throw new Error(`Không tìm thấy cột ngày ${todayDay} ở hàng ${ordersDateRow}. Bạn cần tạo và merge ô cho ngày này thủ công.`);
+  }
+
+  const dishCol = sheetColumnToLetter(startCol1Based + 2 * pairIndex);
+  const priceCol = sheetColumnToLetter(startCol1Based + 2 * pairIndex + 1);
+  const blockRange = `${quoted}!${dishCol}${startRow}:${priceCol}${startRow + userRows.length - 1}`;
+
+  const blockRes = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: blockRange,
+  });
+  const existingBlock = blockRes.data.values || [];
+  while (existingBlock.length < userRows.length) {
+    existingBlock.push(['', '']);
+  }
+
+  const normalized = (s) => String(s ?? '').trim().toLowerCase();
+  const newBlock = [];
+  for (let i = 0; i < userRows.length; i++) {
+    const userNameInSheet = userRows[i]?.[0] != null ? String(userRows[i][0]).trim() : '';
+    const key = Object.keys(ordersByUserName).find((k) => normalized(k) === normalized(userNameInSheet));
+    if (key) {
+      const { dishNumber, price } = ordersByUserName[key];
+      newBlock.push([dishNumber, price]);
+    } else {
+      const prev = existingBlock[i];
+      newBlock.push(prev && prev.length >= 2 ? [prev[0] ?? '', prev[1] ?? ''] : ['', '']);
+    }
+  }
+
+  await sheets.spreadsheets.values.update({
+    spreadsheetId,
+    range: blockRange,
+    valueInputOption: 'USER_ENTERED',
+    requestBody: { values: newBlock },
+  });
 }
 
 export async function handler(event) {
@@ -102,9 +292,10 @@ export async function handler(event) {
   try {
     const config = await getConfig();
     const botToken = config['bot-token'];
-    const orderApiUrl = config['order-api-url'];
+    const sheetId = config['sheet-id'];
+    const credentials = config['sheet-credentials'];
     if (!botToken) throw new Error('Missing bot-token in Parameter Store');
-    if (!orderApiUrl) throw new Error('Missing order-api-url in Parameter Store');
+    if (!sheetId || !credentials) throw new Error('Missing sheet-id or sheet-credentials in Parameter Store');
 
     const menu = await getTodayMenuMessage();
     if (!menu) {
@@ -112,12 +303,51 @@ export async function handler(event) {
       return { ok: true, skipped: true, reason: 'no_menu_today' };
     }
 
-    const { channel_id, message_ts, dish_count } = menu;
-    const orders = await getReactions(botToken, channel_id, message_ts);
-    await postOrders(orderApiUrl, message_ts, orders);
+    const { channel_id, message_ts } = menu;
+    const { orders, upUserIds } = await getReactions(botToken, channel_id, message_ts);
+    if (orders.length === 0) {
+      console.log('No reactions on menu message');
+      return { ok: true, message_ts, order_count: 0 };
+    }
 
-    console.log('Collected orders:', orders.length, 'emoji groups, posted to order API');
-    return { ok: true, message_ts, order_count: orders.length };
+    const userIdToName = await resolveUserIdsToNames(botToken);
+    console.log('Resolved users:', Object.keys(userIdToName).length, 'Upsize users:', upUserIds.size);
+
+    const sheetName = config['dishes-sheet-name'] || 'Dishes';
+    const dishesRange = config['dishes-range'] || 'N4:N8';
+    const ordersUserRange = config['orders-user-range'] || 'A15:A100';
+    const ordersDateRow = parseInt(config['orders-date-row'] || '12', 10);
+    const ordersColumnStart = config['orders-column-start'] || 'B';
+    const ordersDefaultPrice = parseInt(config['orders-default-price'] || '35000', 10);
+    const ordersUpsizePrice = parseInt(config['orders-upsize-price'] || '40000', 10);
+    const ordersMaxDays = parseInt(config['orders-max-days'] || '31', 10);
+
+    const sheets = getSheetsClient(credentials);
+    const dishes = await fetchDishesFromSheet(sheets, sheetId, sheetName, dishesRange);
+    const ordersByUserName = buildOrdersByUserName(
+      orders,
+      userIdToName,
+      dishes,
+      ordersDefaultPrice,
+      upUserIds,
+      ordersUpsizePrice
+    );
+    console.log('Orders by user:', JSON.stringify(ordersByUserName, null, 2));
+
+    await writeOrdersToSheet(
+      sheets,
+      sheetId,
+      sheetName,
+      ordersUserRange,
+      ordersDateRow,
+      ordersColumnStart,
+      ordersDefaultPrice,
+      ordersMaxDays,
+      ordersByUserName
+    );
+    console.log('Wrote orders to sheet');
+
+    return { ok: true, message_ts, order_count: Object.keys(ordersByUserName).length };
   } catch (err) {
     console.error('CollectOrders error:', err);
     throw err;

@@ -34,7 +34,7 @@ Resources:
       FunctionName: slack-dishes-post-menu
       CodeUri: ../serverless/post-menu
       Handler: index.handler
-      Description: Runs at 9:30 UTC; fetches dishes, posts to Slack, stores message_ts in DynamoDB.
+      Description: Runs at 9:30 UTC; fetches dishes from Google Sheet (dish-range), posts to Slack, stores message_ts in DynamoDB.
       Environment:
         Variables:
           TABLE_NAME: !Ref MenuMessageTable
@@ -70,7 +70,7 @@ Resources:
       FunctionName: slack-dishes-collect-orders
       CodeUri: ../serverless/collect-orders
       Handler: index.handler
-      Description: Runs at 10:20 UTC; reads menu message from DynamoDB, calls reactions.get, aggregates, POSTs to order API.
+      Description: Runs at 10:20 UTC; reads menu message from DynamoDB, calls reactions.get, resolves user_id to name (users.list), writes orders to Google Sheet by user row.
       Environment:
         Variables:
           TABLE_NAME: !Ref MenuMessageTable
