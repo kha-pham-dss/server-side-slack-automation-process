@@ -59,7 +59,7 @@ Resources:
         PostMenuSchedule:
           Type: Schedule
           Properties:
-            Schedule: cron(30 2 * * ? *)
+            Schedule: cron(30 2 ? * MON-FRI *)
             Name: post-menu-daily
             Description: Invoke PostMenu at 9:30 GMT+7 (VNT)
             Enabled: true
@@ -94,7 +94,7 @@ Resources:
         CollectOrdersSchedule:
           Type: Schedule
           Properties:
-            Schedule: cron(20 3 * * ? *)
+            Schedule: cron(20 3 ? * MON-FRI *)
             Name: collect-orders-daily
             Description: Invoke CollectOrders at 10:20 GMT+7 (VNT)
             Enabled: true
