@@ -44,6 +44,14 @@ function dateKey() {
   return new Date().toISOString().slice(0, 10); // YYYY-MM-DD UTC
 }
 
+/** Sheet tab name: "Tháng {month} / {year}" (e.g. Tháng 2 / 2026). Uses UTC. */
+function getDishesSheetNameForCurrentMonth() {
+  const d = new Date();
+  const month = d.getUTCMonth() + 1;
+  const year = d.getUTCFullYear();
+  return `Tháng ${month} / ${year}`;
+}
+
 async function getTodayMenuMessage() {
   const date = dateKey();
   const res = await dynamo.send(
@@ -313,7 +321,7 @@ export async function handler(event) {
     const userIdToName = await resolveUserIdsToNames(botToken);
     console.log('Resolved users:', Object.keys(userIdToName).length, 'Upsize users:', upUserIds.size);
 
-    const sheetName = config['dishes-sheet-name'] || 'Dishes';
+    const sheetName = config['dishes-sheet-name'] || getDishesSheetNameForCurrentMonth();
     const dishesRange = config['dishes-range'] || 'N4:N8';
     const ordersUserRange = config['orders-user-range'] || 'A15:A100';
     const ordersDateRow = parseInt(config['orders-date-row'] || '12', 10);

@@ -12,8 +12,9 @@ Timeline (Mon–Fri only):
   EventBridge ──────► PostMenu Lambda
                             │
                             ├──► SSM (config)
-                            ├──► Google Sheets  (GET dishes)
-                            ├──► Slack          (post menu → get message_ts)
+                            ├──► Slack DM       (latest message from menu user → parse dishes)
+                            ├──► Google Sheets  (write dish list)
+                            ├──► Slack channel  (post menu → get message_ts)
                             └──► DynamoDB       (store date, message_ts)
 
   ─ ─ ─ ─ ─ ─ ─ ─ ─

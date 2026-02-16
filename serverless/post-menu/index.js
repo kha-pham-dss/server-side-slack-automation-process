@@ -1,6 +1,7 @@
 /**
- * PostMenu Lambda (9:30 UTC).
- * Fetches dishes from Google Sheet (dish-range), posts to Slack, stores message_ts in DynamoDB.
+ * PostMenu Lambda (9:30 GMT+7 Mon–Fri).
+ * Fetches dishes from latest message in DM with menu source user (skip first line; rest = dish names),
+ * updates the sheet with that list, posts menu to Slack channel, stores message_ts in DynamoDB.
  */
 
 import { SSMClient, GetParametersByPathCommand } from '@aws-sdk/client-ssm';
@@ -43,31 +44,75 @@ function getSheetsClient(credentialsJson) {
   const cred = JSON.parse(credentialsJson);
   const auth = new google.auth.GoogleAuth({
     credentials: cred,
-    scopes: ['https://www.googleapis.com/auth/spreadsheets.readonly'],
+    scopes: ['https://www.googleapis.com/auth/spreadsheets'],
   });
   return google.sheets({ version: 'v4', auth });
 }
 
+const MENU_DM_USER_ID_DEFAULT = 'U02SJRNAM2M';
+
+/** Sheet tab name: "Tháng {month} / {year}" (e.g. Tháng 2 / 2026). Uses UTC. */
+function getDishesSheetNameForCurrentMonth() {
+  const d = new Date();
+  const month = d.getUTCMonth() + 1;
+  const year = d.getUTCFullYear();
+  return `Tháng ${month} / ${year}`;
+}
+
 /**
- * Read dishes from Google Sheet (specific sheet tab + range, e.g. N4:N8).
+ * Get latest message from DM with the given user and parse dishes.
+ * Message format: first line = title (e.g. "Thực đơn ngày mai 12/1"), skip; next lines = dish names.
  * Returns [ { id: "0", name: "Dish A" }, ... ] (id = 0-based index).
  */
-async function fetchDishesFromSheet(sheets, spreadsheetId, sheetName, rangeSpec) {
+async function fetchDishesFromSlackDM(botToken, userId) {
+  const openRes = await fetch('https://slack.com/api/conversations.open', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json; charset=utf-8',
+      Authorization: `Bearer ${botToken}`,
+    },
+    body: JSON.stringify({ users: userId }),
+  });
+  const openData = await openRes.json();
+  if (!openData.ok) throw new Error(`Slack conversations.open error: ${openData.error ?? openRes.status}`);
+  const channelId = openData.channel?.id;
+  if (!channelId) throw new Error('Slack conversations.open did not return channel id');
+
+  const histRes = await fetch(
+    `https://slack.com/api/conversations.history?channel=${encodeURIComponent(channelId)}&limit=1`,
+    {
+      headers: { Authorization: `Bearer ${botToken}` },
+    }
+  );
+  const histData = await histRes.json();
+  if (!histData.ok) throw new Error(`Slack conversations.history error: ${histData.error ?? histRes.status}`);
+  const messages = histData.messages || [];
+  const latest = messages[0];
+  if (!latest?.text) throw new Error('No message or empty text in DM with menu source user');
+
+  const lines = latest.text.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+  const dishNames = lines.slice(1);
+  return dishNames.map((name, i) => ({ id: String(i), name }));
+}
+
+/**
+ * Write dishes to Google Sheet (one column, one row per dish).
+ * rangeSpec e.g. N4:N8 — we use its column and start row, write up to dishes.length rows.
+ */
+async function updateDishesToSheet(sheets, spreadsheetId, sheetName, rangeSpec, dishes) {
+  const match = rangeSpec.match(/^([A-Z]+)(\d+)/i);
+  const col = match ? match[1].toUpperCase() : 'N';
+  const startRow = match ? parseInt(match[2], 10) : 4;
+  const endRow = startRow + Math.max(dishes.length, 1) - 1;
   const quoted = /[\s']/.test(sheetName) ? `'${sheetName.replace(/'/g, "''")}'` : sheetName;
-  const range = `${quoted}!${rangeSpec}`;
-  const res = await sheets.spreadsheets.values.get({
+  const range = `${quoted}!${col}${startRow}:${col}${endRow}`;
+  const values = dishes.map((d) => [typeof d === 'object' && d != null && d.name != null ? d.name : String(d)]);
+  await sheets.spreadsheets.values.update({
     spreadsheetId,
     range,
+    valueInputOption: 'USER_ENTERED',
+    requestBody: { values },
   });
-  const rows = res.data.values || [];
-  const dishes = [];
-  for (let i = 0; i < rows.length; i++) {
-    const row = rows[i];
-    const name = row?.[0] != null ? String(row[0]).trim() : '';
-    if (!name) continue;
-    dishes.push({ id: String(i), name });
-  }
-  return dishes;
 }
 
 const DIGIT_EMOJI = ['one', 'two', 'three', 'four', 'five', 'six'];
@@ -204,18 +249,22 @@ export async function handler(event) {
 
   try {
     const config = await getConfig();
-    let dishes;
+    const botToken = config['bot-token'];
+    if (!botToken) throw new Error('Missing bot-token in Parameter Store (required to read menu from DM)');
+
+    const menuDmUserId = config['menu-dm-user-id'] || MENU_DM_USER_ID_DEFAULT;
+    const dishes = await fetchDishesFromSlackDM(botToken, menuDmUserId);
+    if (!dishes.length) throw new Error('No dishes parsed from latest DM message');
 
     const sheetId = config['sheet-id'];
     const credentials = config['sheet-credentials'];
     if (sheetId && credentials) {
-      const sheetName = config['dishes-sheet-name'] || 'Dishes';
+      const sheetName = config['dishes-sheet-name'] || getDishesSheetNameForCurrentMonth();
       const dishesRange = config['dishes-range'] || 'N3:N8';
       const sheets = getSheetsClient(credentials);
-      dishes = await fetchDishesFromSheet(sheets, sheetId, sheetName, dishesRange);
-    } else {
-      throw new Error('Missing sheet-id or sheet-credentials in Parameter Store');
+      await updateDishesToSheet(sheets, sheetId, sheetName, dishesRange, dishes);
     }
+
     const blocks = buildSlackBlocks(dishes);
     const text = buildSlackTextFallback(dishes);
     const shownCount = Math.min(dishes.length, MAX_DISHES);
@@ -223,7 +272,6 @@ export async function handler(event) {
     const { channel_id, message_ts } = await postToSlack(config, blocks, text);
     await storeMenuMessage(channel_id, message_ts, shownCount);
 
-    const botToken = config['bot-token'];
     if (botToken) {
       const reactionNames = [...DIGIT_EMOJI.slice(0, shownCount), 'up'];
       await addReactionsToMessage(botToken, channel_id, message_ts, reactionNames);

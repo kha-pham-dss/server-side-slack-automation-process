@@ -34,7 +34,7 @@ Resources:
       FunctionName: slack-dishes-post-menu
       CodeUri: ../serverless/post-menu
       Handler: index.handler
-      Description: Runs at 9:30 GMT+7 (VNT); fetches dishes from Google Sheet (dish-range), posts to Slack, stores message_ts in DynamoDB.
+      Description: Runs at 9:30 GMT+7 (VNT); reads menu from latest DM with menu-dm-user-id, updates sheet, posts to Slack, stores message_ts in DynamoDB.
       Environment:
         Variables:
           TABLE_NAME: !Ref MenuMessageTable
