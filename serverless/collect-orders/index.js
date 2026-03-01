@@ -44,11 +44,11 @@ function dateKey() {
   return new Date().toISOString().slice(0, 10); // YYYY-MM-DD UTC
 }
 
-/** Sheet tab name: "Tháng {month} / {year}" (e.g. Tháng 2 / 2026). Uses UTC. */
+/** Sheet tab name: "Tháng {month} / {year}" (e.g. Tháng 2 / 2026). Uses GMT+7. */
 function getDishesSheetNameForCurrentMonth() {
-  const d = new Date();
-  const month = d.getUTCMonth() + 1;
-  const year = d.getUTCFullYear();
+  const gmt7 = new Date(Date.now() + 7 * 60 * 60 * 1000);
+  const month = gmt7.getUTCMonth() + 1;
+  const year = gmt7.getUTCFullYear();
   return `Tháng ${month} / ${year}`;
 }
 
@@ -170,6 +170,7 @@ async function fetchDishesFromSheet(sheets, spreadsheetId, sheetName, rangeSpec)
 /**
  * Build map: userName -> { dishNumber (1-based), price }.
  * User nào react :up: thì price = upPrice (40k), còn lại defaultPrice (35k).
+ * Also returns multiOrderUserIds: users who reacted to 2+ dishes (we only count first); firstDishIndex is 1-based.
  */
 function buildOrdersByUserName(orders, userIdToName, dishes, defaultPrice = 35000, upUserIds = new Set(), upPrice = 40000) {
   /** @type {Record<string, number[]>} */
@@ -182,6 +183,8 @@ function buildOrdersByUserName(orders, userIdToName, dishes, defaultPrice = 3500
   }
   /** @type {Record<string, { dishNumber: number; price: number }>} */
   const ordersByUserName = {};
+  /** @type {Array<{ userId: string; firstDishIndex1Based: number }>} */
+  const multiOrderUserIds = [];
   for (const [uid, indices] of Object.entries(userToDishIndices)) {
     const name = userIdToName[uid] ?? uid;
     const sorted = [...indices].sort((a, b) => a - b);
@@ -191,8 +194,11 @@ function buildOrdersByUserName(orders, userIdToName, dishes, defaultPrice = 3500
       dishNumber: firstDishIndex + 1,
       price,
     };
+    if (sorted.length > 1) {
+      multiOrderUserIds.push({ userId: uid, firstDishIndex1Based: firstDishIndex + 1 });
+    }
   }
-  return ordersByUserName;
+  return { ordersByUserName, multiOrderUserIds };
 }
 
 /** Chuyển cột 1-based sang chữ (1=A, 2=B, ..., 27=AA). */
@@ -227,7 +233,7 @@ async function writeOrdersToSheet(sheets, spreadsheetId, ordersSheetName, orders
 
   const match = ordersUserRange.match(/^([A-Z]+)(\d+):([A-Z]+)(\d+)$/i) || ordersUserRange.match(/^([A-Z]+)(\d+)$/i);
   const startRow = match ? parseInt(match[2], 10) : 15;
-  const todayDay = new Date().getDate();
+  const todayDay = new Date(Date.now() + 7 * 60 * 60 * 1000).getUTCDate();
 
   let startCol1Based = 2;
   const colStr = ordersColumnStart.toUpperCase();
@@ -294,6 +300,42 @@ async function writeOrdersToSheet(sheets, spreadsheetId, ordersSheetName, orders
   });
 }
 
+/** Post a message in a Slack thread (channel + thread_ts). Requires chat:write. */
+async function postReplyInThread(botToken, channelId, threadTs, text) {
+  const res = await fetch('https://slack.com/api/chat.postMessage', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json; charset=utf-8',
+      Authorization: `Bearer ${botToken}`,
+    },
+    body: JSON.stringify({
+      channel: channelId,
+      thread_ts: threadTs,
+      text,
+    }),
+  });
+  const data = await res.json();
+  if (!data.ok) throw new Error(`Slack chat.postMessage error: ${data.error ?? res.status}`);
+}
+
+/** Add a single reaction to a message. Requires reactions:write. */
+async function addReactionToMessage(botToken, channelId, messageTs, emojiName) {
+  const res = await fetch('https://slack.com/api/reactions.add', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json; charset=utf-8',
+      Authorization: `Bearer ${botToken}`,
+    },
+    body: JSON.stringify({
+      channel: channelId,
+      timestamp: messageTs,
+      name: emojiName,
+    }),
+  });
+  const data = await res.json();
+  if (!data.ok) console.warn('reactions.add failed for', emojiName, data.error);
+}
+
 export async function handler(event) {
   console.log('CollectOrders invoked', JSON.stringify(event?.detail ?? event));
 
@@ -332,7 +374,7 @@ export async function handler(event) {
 
     const sheets = getSheetsClient(credentials);
     const dishes = await fetchDishesFromSheet(sheets, sheetId, sheetName, dishesRange);
-    const ordersByUserName = buildOrdersByUserName(
+    const { ordersByUserName, multiOrderUserIds } = buildOrdersByUserName(
       orders,
       userIdToName,
       dishes,
@@ -354,6 +396,25 @@ export async function handler(event) {
       ordersByUserName
     );
     console.log('Wrote orders to sheet');
+
+    const triggeredBySlackReply = event?.triggeredBy === 'slack_reply';
+
+    // Ping users who reacted to 2+ dishes: only first dish is recorded.
+    for (const { userId, firstDishIndex1Based } of multiOrderUserIds) {
+      const text = `<@${userId}> Bạn đang đặt 2 món, nhà bếp chỉ ghi nhận món ${firstDishIndex1Based}`;
+      try {
+        await postReplyInThread(botToken, channel_id, message_ts, text);
+      } catch (err) {
+        console.warn('Failed to ping multi-order user', userId, err);
+      }
+    }
+
+    if (triggeredBySlackReply && event?.replyChannelId && event?.replyTs) {
+      await addReactionToMessage(botToken, event.replyChannelId, event.replyTs, 'white_check_mark');
+    } else {
+      // Schedule run: post confirmation reply under today's menu.
+      await postReplyInThread(botToken, channel_id, message_ts, 'Đã ghi nhận danh sách đặt món :bee-like:');
+    }
 
     return { ok: true, message_ts, order_count: Object.keys(ordersByUserName).length };
   } catch (err) {

@@ -70,7 +70,7 @@ Resources:
       FunctionName: slack-dishes-collect-orders
       CodeUri: ../serverless/collect-orders
       Handler: index.handler
-      Description: Runs at 10:20 GMT+7 (VNT); reads menu message from DynamoDB, calls reactions.get, resolves user_id to name (users.list), writes orders to Google Sheet by user row.
+      Description: Runs at 10:20 GMT+7 (VNT); reads menu message from DynamoDB, calls reactions.get, resolves user_id to name (users.list), writes orders to Google Sheet by user row. Can be invoked by schedule or by SlackEvents when user replies under menu.
       Environment:
         Variables:
           TABLE_NAME: !Ref MenuMessageTable
@@ -99,6 +99,43 @@ Resources:
             Description: Invoke CollectOrders at 10:20 GMT+7 (VNT)
             Enabled: true
 
+  SlackEventsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: slack-dishes-slack-events
+      CodeUri: ../serverless/slack-events
+      Handler: index.handler
+      Description: Receives Slack Events API; if message is a reply under today's menu post, invokes CollectOrders (which writes sheet and reacts with white_check_mark).
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref MenuMessageTable
+          COLLECT_ORDERS_FUNCTION_NAME: !Ref CollectOrdersFunction
+          PARAMETER_PREFIX: /slack-dishes
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - ssm:GetParameter
+              Resource: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/slack-dishes/signing-secret'
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+              Resource: !GetAtt MenuMessageTable.Arn
+            - Effect: Allow
+              Action:
+                - lambda:InvokeFunction
+              Resource: !GetAtt CollectOrdersFunction.Arn
+      FunctionUrlConfig:
+        AuthType: NONE
+        Cors:
+          AllowOrigins:
+            - '*'
+          AllowMethods:
+            - POST
+          AllowHeaders:
+            - '*'
+
 Outputs:
   MenuMessageTableName:
     Description: DynamoDB table for menu message metadata
@@ -111,3 +148,9 @@ Outputs:
   CollectOrdersFunctionArn:
     Description: CollectOrders Lambda ARN
     Value: !GetAtt CollectOrdersFunction.Arn
+  SlackEventsFunctionUrl:
+    Description: Slack Events API Request URL - set this in Slack app Event Subscriptions
+    Value: !GetAtt SlackEventsFunctionUrl.FunctionUrl
+  SlackEventsFunctionArn:
+    Description: SlackEvents Lambda ARN
+    Value: !GetAtt SlackEventsFunction.Arn

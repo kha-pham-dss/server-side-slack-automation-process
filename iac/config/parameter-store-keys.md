@@ -5,6 +5,7 @@ Config is stored in **SSM Parameter Store** under the prefix `/slack-dishes/`. S
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `/slack-dishes/bot-token` | SecureString | Slack Bot User OAuth Token (xoxb-...). Scopes: `chat:write`, `reactions:read`, `reactions:write`, `users:read`, `im:write`, `im:history` (DM to read menu from menu source user). |
+| `/slack-dishes/signing-secret` | SecureString | Slack Signing Secret (from app Basic Information). Required for Slack Events API endpoint (SlackEvents Lambda) to verify requests. |
 | `/slack-dishes/channel-id` | String | Target Slack channel ID where the menu is posted |
 | `/slack-dishes/menu-dm-user-id` | String (optional) | Slack user ID whose **latest DM message** is used as menu source (first line = title, skip; rest = dish names). Default: `U02SJRNAM2M`. |
 | `/slack-dishes/webhook-url` | SecureString (optional) | Incoming Webhook URL; if set, PostMenu posts via webhook instead of chat.postMessage |

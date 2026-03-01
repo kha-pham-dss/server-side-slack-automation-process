@@ -143,6 +143,13 @@ function buildSlackBlocks(dishes) {
         text: ':up: để upsize lên 40k',
       },
     },
+    {
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: 'Ping Mr.Chef sau 10h20 để chỉnh sửa hoặc đặt thêm',
+      },
+    },
   ];
   return blocks;
 }
