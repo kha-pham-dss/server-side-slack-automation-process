@@ -207,9 +207,13 @@ async function postToSlack(config, blocks, text) {
 /**
  * Thêm reaction vào message (cần bot token + scope reactions:write).
  * emojiNames: ['one', 'two', ..., 'up'] (không có dấu hai chấm).
+ * Gửi tuần tự + delay ngắn để Slack thường hiển thị đúng thứ tự (Slack không cho API chỉ định thứ tự).
  */
 async function addReactionsToMessage(botToken, channelId, messageTs, emojiNames) {
-  for (const name of emojiNames) {
+  const delayMs = 180;
+  for (let i = 0; i < emojiNames.length; i++) {
+    if (i > 0) await new Promise((r) => setTimeout(r, delayMs));
+    const name = emojiNames[i];
     const res = await fetch('https://slack.com/api/reactions.add', {
       method: 'POST',
       headers: {
