@@ -210,9 +210,8 @@ async function postToSlack(config, blocks, text) {
  * Gửi tuần tự + delay ngắn để Slack thường hiển thị đúng thứ tự (Slack không cho API chỉ định thứ tự).
  */
 async function addReactionsToMessage(botToken, channelId, messageTs, emojiNames) {
-  const delayMs = 180;
+  const delayMs = 500;
   for (let i = 0; i < emojiNames.length; i++) {
-    if (i > 0) await new Promise((r) => setTimeout(r, delayMs));
     const name = emojiNames[i];
     const res = await fetch('https://slack.com/api/reactions.add', {
       method: 'POST',
@@ -230,6 +229,7 @@ async function addReactionsToMessage(botToken, channelId, messageTs, emojiNames)
     if (!data.ok) {
       console.warn('reactions.add failed for', name, data.error);
     }
+    if (i > 0) await new Promise((r) => setTimeout(r, delayMs));
   }
 }
 
