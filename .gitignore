@@ -2,3 +2,9 @@ node_modules/
 .aws-sam/
 *.zip
 .DS_Store
+
+# Local secrets (never commit)
+.env
+# Zalo session (never commit)
+config/zalo-cookies.local.json
+config/zalo-credentials.local.json

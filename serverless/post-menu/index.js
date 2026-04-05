@@ -20,24 +20,37 @@ let configCache = {};
 let configCacheTime = 0;
 const CACHE_TTL_MS = 60_000;
 
+async function loadAllParametersByPath() {
+  const pathPrefix = PARAMETER_PREFIX.endsWith('/') ? PARAMETER_PREFIX.slice(0, -1) : PARAMETER_PREFIX;
+  const namePrefix = `${pathPrefix}/`;
+  const map = {};
+  let nextToken;
+  do {
+    const res = await ssm.send(
+      new GetParametersByPathCommand({
+        Path: pathPrefix,
+        Recursive: true,
+        WithDecryption: true,
+        NextToken: nextToken,
+        MaxResults: 10,
+      })
+    );
+    for (const p of res.Parameters || []) {
+      const name = p.Name?.replace(namePrefix, '') || '';
+      if (name && p.Value != null && p.Value !== '') map[name] = p.Value;
+    }
+    nextToken = res.NextToken;
+  } while (nextToken);
+  return map;
+}
+
 async function getConfig() {
   if (Date.now() - configCacheTime < CACHE_TTL_MS && Object.keys(configCache).length > 0) {
     return configCache;
   }
-  const cmd = new GetParametersByPathCommand({
-    Path: PARAMETER_PREFIX,
-    Recursive: true,
-    WithDecryption: true,
-  });
-  const res = await ssm.send(cmd);
-  const map = {};
-  for (const p of res.Parameters || []) {
-    const name = p.Name?.replace(PARAMETER_PREFIX + '/', '') || '';
-    if (name && p.Value) map[name] = p.Value;
-  }
-  configCache = map;
+  configCache = await loadAllParametersByPath();
   configCacheTime = Date.now();
-  return map;
+  return configCache;
 }
 
 function getSheetsClient(credentialsJson) {

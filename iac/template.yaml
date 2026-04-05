@@ -99,6 +99,36 @@ Resources:
             Description: Invoke CollectOrders at 10:20 GMT+7 (VNT)
             Enabled: true
 
+  ZaloSheetSummaryFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: slack-dishes-zalo-sheet-summary
+      CodeUri: ../serverless/zalo-sheet-summary
+      Handler: index.handler
+      Description: Runs at 11:00 GMT+7 (VNT); reads sheet range (default M58:M72), skips blank lines, sends one Zalo group message.
+      Environment:
+        Variables:
+          PARAMETER_PREFIX: /slack-dishes
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - ssm:GetParameter
+                - ssm:GetParameters
+                - ssm:GetParametersByPath
+              Resource:
+                - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/slack-dishes'
+                - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/slack-dishes/*'
+      Events:
+        ZaloSheetSummarySchedule:
+          Type: Schedule
+          Properties:
+            Schedule: cron(0 4 ? * MON-FRI *)
+            Name: zalo-sheet-summary-daily
+            Description: Invoke Zalo sheet summary at 11:00 GMT+7 (VNT)
+            Enabled: true
+
   SlackEventsFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -148,6 +178,9 @@ Outputs:
   CollectOrdersFunctionArn:
     Description: CollectOrders Lambda ARN
     Value: !GetAtt CollectOrdersFunction.Arn
+  ZaloSheetSummaryFunctionArn:
+    Description: Zalo sheet summary Lambda ARN
+    Value: !GetAtt ZaloSheetSummaryFunction.Arn
   SlackEventsFunctionUrl:
     Description: Slack Events API Request URL - set this in Slack app Event Subscriptions
     Value: !GetAtt SlackEventsFunctionUrl.FunctionUrl

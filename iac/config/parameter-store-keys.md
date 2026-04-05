@@ -2,6 +2,10 @@
 
 Config is stored in **SSM Parameter Store** under the prefix `/slack-dishes/`. Standard parameters are included in the free tier. Use **SecureString** for tokens.
 
+**Tên parameter** phải khớp **chính xác** các cột trong bảng (dạng `sheet-id`, `sheet-credentials`, … — dấu gạch ngang). Tên kiểu `sheet_id` hoặc path khác prefix sẽ không map vào code.
+
+Lambda đọc SSM bằng `GetParametersByPath` có **phân trang** (mỗi lần tối đa 10 key); code trong repo đã gom đủ các trang. Nếu bạn dùng bản code cũ chỉ một request, khi có **hơn 10** parameter dưới `/slack-dishes/` thì một số key (như `sheet-id`) có thể không bao giờ được load → lỗi `missing_sheet_config`.
+
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `/slack-dishes/bot-token` | SecureString | Slack Bot User OAuth Token (xoxb-...). Scopes: `chat:write`, `reactions:read`, `reactions:write`, `users:read`, `im:write`, `im:history` (DM to read menu from menu source user). |
@@ -19,6 +23,14 @@ Config is stored in **SSM Parameter Store** under the prefix `/slack-dishes/`. S
 | `/slack-dishes/orders-default-price` | String (optional) | Giá mặc định mỗi suất (VND). Default: `35000`. |
 | `/slack-dishes/orders-upsize-price` | String (optional) | Giá khi user react :up: (VND). Default: `40000`. |
 | `/slack-dishes/orders-max-days` | String (optional) | Max day columns to scan (e.g. 31). Default: `31`. |
+| `/slack-dishes/zalo-group-id` | String (optional) | Zalo **group** id. Bắt buộc cho Lambda **ZaloSheetSummary** (11:00 VNT): gửi nội dung ô sheet lên nhóm. Lấy id: `node scripts/zalo/list-groups.mjs` (sau `npm install --prefix scripts/zalo`). |
+| `/slack-dishes/zalo-cookies-json` | SecureString (optional) | JSON cookie: Chrome export `{"url":"https://chat.zalo.me","cookies":[...]}` hoặc mảng `cookies`. Cập nhật khi session hết hạn. |
+| `/slack-dishes/zalo-imei` | SecureString (optional) | `localStorage.getItem('z_uuid')` trên chat.zalo.me (zca-js gọi là `imei`). |
+| `/slack-dishes/zalo-user-agent` | String (optional) | User-Agent cùng profile trình duyệt đã export cookie. |
+| `/slack-dishes/zalo-language` | String (optional) | Mặc định `vi`. |
+| `/slack-dishes/zalo-summary-range` | String (optional) | Vùng A1 một cột (ví dụ `M58:M72`). Lambda đọc từng ô cột M, **bỏ dòng trống**, nối còn lại bằng xuống dòng rồi gửi một tin Zalo. Mặc định `M58:M72`. |
+
+**Ghi chú:** Lambda `slack-dishes-zalo-sheet-summary` chạy **11:00 GMT+7** (T2–T6). Cấu hình chạy tay trên máy: xem `.env.tmp` → copy thành `.env`. API Zalo không chính thức — rủi ro tài khoản; xem [zca-js](https://github.com/RFS-ADRENO/zca-js).
 
 Example (AWS CLI):
 
@@ -39,6 +51,12 @@ aws ssm put-parameter --name /slack-dishes/sheet-credentials --value "$(cat path
 # aws ssm put-parameter --name /slack-dishes/orders-column-start --value "B" --type String
 # aws ssm put-parameter --name /slack-dishes/orders-default-price --value "35000" --type String
 # aws ssm put-parameter --name /slack-dishes/orders-max-days --value "31" --type String
+# Optional Zalo — Lambda 11h VNT (tóm tắt từ sheet M58:M72 mặc định):
+# aws ssm put-parameter --name /slack-dishes/zalo-group-id --value "YOUR_GROUP_ID" --type String
+# aws ssm put-parameter --name /slack-dishes/zalo-imei --value "YOUR_Z_UUID" --type SecureString
+# aws ssm put-parameter --name /slack-dishes/zalo-user-agent --value "Mozilla/5.0 ..." --type String
+# aws ssm put-parameter --name /slack-dishes/zalo-cookies-json --value "$(jq -c . < path/to/chrome-export.json)" --type SecureString
+# aws ssm put-parameter --name /slack-dishes/zalo-summary-range --value "M58:M72" --type String
 ```
 
 Do not commit tokens or credentials. Create parameters before first deploy or run.
