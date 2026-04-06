@@ -48,6 +48,17 @@ export async function fetchNonEmptyLinesFromRange(sheets, spreadsheetId, sheetNa
   return lines;
 }
 
+/** Tìm số suất trong dòng kiểu "Tổng 8 suất anh nhé" / "tổng 0 suất" (không phân biệt hoa thường). */
+export function parseTotalServings(lines) {
+  const re = /Tổng\s*(\d+)\s*suất/i;
+  let last = null;
+  for (const line of lines) {
+    const m = line.match(re);
+    if (m) last = parseInt(m[1], 10);
+  }
+  return last;
+}
+
 /**
  * @param {Record<string, string>} config keys like collect-orders SSM map (kebab-case)
  * @returns {Promise<{ ok?: true; skipped?: true; reason?: string }>}
@@ -82,12 +93,22 @@ export async function runFromConfig(config) {
 
   const sheets = getSheetsClient(credentials);
   const lines = await fetchNonEmptyLinesFromRange(sheets, sheetId, sheetName, cellRange);
-  if (lines.length === 0) {
-    console.warn('Zalo sheet summary: no non-empty cells in', cellRange);
+  const body = lines.join('\n').trim();
+  const totalServings = parseTotalServings(lines);
+  const noOrdersMsg = 'Nay bọn em không đặt gì anh nhé';
+
+  let msg;
+  let noOrders = false;
+  if (totalServings === 0) {
+    msg = noOrdersMsg;
+    noOrders = true;
+    console.log('Zalo sheet summary: Tổng 0 suất — sending no-order message');
+  } else if (body) {
+    msg = body;
+  } else {
+    console.warn('Zalo sheet summary: no text in', cellRange, 'and no Tổng … suất line');
     return { skipped: true, reason: 'empty_range' };
   }
-
-  const msg = lines.join('\n');
 
   let cookie;
   try {
@@ -106,6 +127,10 @@ export async function runFromConfig(config) {
   });
 
   await api.sendMessage({ msg }, groupId, ThreadType.Group);
-  console.log('Zalo sheet summary: sent', lines.length, 'lines to group', groupId);
-  return { ok: true, line_count: lines.length };
+  console.log(
+    'Zalo sheet summary: sent to group',
+    groupId,
+    noOrders ? '(Tổng 0 suất)' : `${lines.length} lines`
+  );
+  return { ok: true, line_count: lines.length, no_orders: noOrders, total_servings: totalServings };
 }
