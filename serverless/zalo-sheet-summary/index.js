@@ -1,5 +1,5 @@
 /**
- * Lambda: 11:00 GMT+7 Mon–Fri — đọc ô sheet (mặc định M58:M72), bỏ dòng trống, gửi một tin Zalo nhóm.
+ * Lambda: 10:45 GMT+7 Mon–Fri — đọc ô sheet (mặc định M58:M72), bỏ dòng trống, gửi một tin Zalo nhóm.
  */
 
 import { SSMClient, GetParametersByPathCommand } from '@aws-sdk/client-ssm';
