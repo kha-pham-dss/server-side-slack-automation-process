@@ -229,7 +229,7 @@ function sheetColumnToLetter(oneBased) {
 
 /**
  * Cột order: từ cột B, mỗi ngày = 2 cột (số món, giá). Hàng 12: 2 ô merge = ngày (1-31).
- * Tìm block cho ngày hôm nay; ghi số món (1-based) và giá (mặc định 35000) vào từng hàng user.
+ * Tìm block cho ngày hôm nay; xóa block đó rồi ghi lại số món (1-based) và giá vào từng hàng user.
  */
 async function writeOrdersToSheet(sheets, spreadsheetId, ordersSheetName, ordersUserRange, ordersDateRow, ordersColumnStart, ordersDefaultPrice, ordersMaxDays, ordersByUserName) {
   const quoted = /[\s']/.test(ordersSheetName) ? `'${ordersSheetName.replace(/'/g, "''")}'` : ordersSheetName;
@@ -282,14 +282,10 @@ async function writeOrdersToSheet(sheets, spreadsheetId, ordersSheetName, orders
   const priceCol = sheetColumnToLetter(startCol1Based + 2 * pairIndex + 1);
   const blockRange = `${quoted}!${dishCol}${startRow}:${priceCol}${startRow + userRows.length - 1}`;
 
-  const blockRes = await sheets.spreadsheets.values.get({
+  await sheets.spreadsheets.values.clear({
     spreadsheetId,
     range: blockRange,
   });
-  const existingBlock = blockRes.data.values || [];
-  while (existingBlock.length < userRows.length) {
-    existingBlock.push(['', '']);
-  }
 
   const normalized = (s) => String(s ?? '').trim().toLowerCase();
   const newBlock = [];
@@ -300,8 +296,7 @@ async function writeOrdersToSheet(sheets, spreadsheetId, ordersSheetName, orders
       const { dishNumber, price } = ordersByUserName[key];
       newBlock.push([dishNumber, price]);
     } else {
-      const prev = existingBlock[i];
-      newBlock.push(prev && prev.length >= 2 ? [prev[0] ?? '', prev[1] ?? ''] : ['', '']);
+      newBlock.push(['', '']);
     }
   }
 
