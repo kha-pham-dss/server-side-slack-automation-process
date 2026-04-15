@@ -4,7 +4,9 @@
   "type": "module",
   "main": "index.js",
   "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.700.0",
     "@aws-sdk/client-ssm": "^3.700.0",
+    "@aws-sdk/util-dynamodb": "^3.700.0",
     "googleapis": "^144.0.0",
     "zca-js": "^2.1.2"
   }

@@ -6,6 +6,7 @@
  *   node --env-file=.env scripts/zalo/send-sheet-summary-local.mjs
  *
  * Cần AWS credentials trên máy (aws configure / AWS_PROFILE) để đọc Parameter Store.
+ * Tùy chọn: TABLE_NAME=slack-dishes-menu-message để đối chiếu Slack trước khi gửi (cùng bảng Dynamo như Lambda).
  */
 
 import { readFileSync, existsSync } from 'node:fs';

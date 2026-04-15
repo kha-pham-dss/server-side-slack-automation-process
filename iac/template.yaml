@@ -105,10 +105,11 @@ Resources:
       FunctionName: slack-dishes-zalo-sheet-summary
       CodeUri: ../serverless/zalo-sheet-summary
       Handler: index.handler
-      Description: Runs at 10:45 GMT+7 (VNT); reads sheet range (default M58:M72), skips blank lines, sends one Zalo group message.
+      Description: Runs at 10:45 GMT+7 (VNT); reads sheet range (default M58:M72), reconciles Slack reactions vs sheet, sends one Zalo group message.
       Environment:
         Variables:
           PARAMETER_PREFIX: /slack-dishes
+          TABLE_NAME: !Ref MenuMessageTable
       Policies:
         - Version: '2012-10-17'
           Statement:
@@ -120,6 +121,10 @@ Resources:
               Resource:
                 - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/slack-dishes'
                 - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/slack-dishes/*'
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+              Resource: !GetAtt MenuMessageTable.Arn
       Events:
         ZaloSheetSummarySchedule:
           Type: Schedule
@@ -135,19 +140,21 @@ Resources:
       FunctionName: slack-dishes-slack-events
       CodeUri: ../serverless/slack-events
       Handler: index.handler
-      Description: Receives Slack Events API; if message is a reply under today's menu post, invokes CollectOrders (which writes sheet and reacts with white_check_mark).
+      Description: Receives Slack Events API; if message is a reply under today's menu post and (when configured) @-mentions Mr.Chef, invokes CollectOrders (sheet + white_check_mark).
       Environment:
         Variables:
           TABLE_NAME: !Ref MenuMessageTable
           COLLECT_ORDERS_FUNCTION_NAME: !Ref CollectOrdersFunction
           PARAMETER_PREFIX: /slack-dishes
+          # Slack user id (e.g. U01ABC…) for Mr.Chef; menu-thread replies must @-mention this user to trigger CollectOrders. Override SSM /slack-dishes/mr-chef-user-id when non-empty.
+          MR_CHEF_SLACK_USER_ID: ''
       Policies:
         - Version: '2012-10-17'
           Statement:
             - Effect: Allow
               Action:
                 - ssm:GetParameter
-              Resource: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/slack-dishes/signing-secret'
+              Resource: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/slack-dishes/*'
             - Effect: Allow
               Action:
                 - dynamodb:GetItem

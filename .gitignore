@@ -1,4 +1,5 @@
 node_modules/
+.npm-cache/
 .aws-sam/
 *.zip
 .DS_Store

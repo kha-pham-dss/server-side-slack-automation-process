@@ -1,6 +1,6 @@
 # IaC – Slack dishes ordering (Option A)
 
-AWS SAM template for **Option A**: scheduled Lambdas (9:30 PostMenu, 10:20 CollectOrders, **11:00 Zalo sheet summary** VNT). Slack Events URL optional. CollectOrders uses Slack `reactions.get`.
+AWS SAM template for **Option A**: scheduled Lambdas (9:30 PostMenu, 10:20 CollectOrders, **10:45 Zalo sheet summary** VNT). Zalo Lambda reads the same DynamoDB menu row and calls `reactions.get` to reconcile counts vs the sheet snippet before sending Zalo; on mismatch it replies in the menu thread. Slack Events URL optional. CollectOrders uses Slack `reactions.get`.
 
 ## Prerequisites
 
@@ -15,6 +15,7 @@ AWS SAM template for **Option A**: scheduled Lambdas (9:30 PostMenu, 10:20 Colle
    ```bash
    npm install --prefix serverless/post-menu
    npm install --prefix serverless/collect-orders
+   npm install --prefix serverless/slack-events
    npm install --prefix serverless/zalo-sheet-summary
    ```
 3. Build and deploy:
@@ -28,8 +29,8 @@ AWS SAM template for **Option A**: scheduled Lambdas (9:30 PostMenu, 10:20 Colle
 ## Resources
 
 - **DynamoDB:** `slack-dishes-menu-message` (partition key: `date` = YYYY-MM-DD)
-- **Lambdas:** `slack-dishes-post-menu`, `slack-dishes-collect-orders`, `slack-dishes-zalo-sheet-summary`
-- **EventBridge:** `post-menu-daily`, `collect-orders-daily`, `zalo-sheet-summary-daily` (11:00 GMT+7; see `template.yaml` for UTC cron)
+- **Lambdas:** `slack-dishes-post-menu`, `slack-dishes-collect-orders`, `slack-dishes-zalo-sheet-summary`, optional `slack-dishes-slack-events` (Function URL)
+- **EventBridge:** `post-menu-daily`, `collect-orders-daily`, `zalo-sheet-summary-daily` (10:45 GMT+7; see `template.yaml` for UTC cron)
 
 ## Timezone
 

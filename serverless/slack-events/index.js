@@ -1,7 +1,7 @@
 /**
  * Slack Events API endpoint (Lambda Function URL).
  * - url_verification: return challenge.
- * - message in thread under today's menu: invoke CollectOrders Lambda, which writes sheet and adds :white_check_mark: to the reply.
+ * - message in thread under today's menu: only if the message @-mentions Mr.Chef (Slack user id from MR_CHEF_SLACK_USER_ID or SSM /slack-dishes/mr-chef-user-id); then invoke CollectOrders (sheet + :white_check_mark: on the reply).
  */
 
 import crypto from 'crypto';
@@ -17,6 +17,44 @@ const ssm = new SSMClient();
 const TABLE_NAME = process.env.TABLE_NAME;
 const COLLECT_ORDERS_FUNCTION_NAME = process.env.COLLECT_ORDERS_FUNCTION_NAME;
 const PARAMETER_PREFIX = process.env.PARAMETER_PREFIX || '/slack-dishes';
+
+/** @type {{ value: string | null | undefined; at: number }} */
+let mrChefUserIdCache = { value: undefined, at: 0 };
+const MR_CHEF_CACHE_MS = 60_000;
+
+function messageMentionsSlackUser(text, slackUserId) {
+  if (!text || !slackUserId) return false;
+  // Slack: <@U123> or <@U123|display name>
+  return text.includes(`<@${slackUserId}`);
+}
+
+async function getMrChefSlackUserId() {
+  const fromEnv = (process.env.MR_CHEF_SLACK_USER_ID || '').trim();
+  if (fromEnv) return fromEnv;
+
+  if (Date.now() - mrChefUserIdCache.at < MR_CHEF_CACHE_MS && mrChefUserIdCache.value !== undefined) {
+    return mrChefUserIdCache.value;
+  }
+
+  try {
+    const res = await ssm.send(
+      new GetParameterCommand({
+        Name: `${PARAMETER_PREFIX}/mr-chef-user-id`,
+        WithDecryption: false,
+      })
+    );
+    const v = (res.Parameter?.Value ?? '').trim();
+    const id = v || null;
+    mrChefUserIdCache = { value: id, at: Date.now() };
+    return id;
+  } catch (e) {
+    if (e?.name === 'ParameterNotFound') {
+      mrChefUserIdCache = { value: null, at: Date.now() };
+      return null;
+    }
+    throw e;
+  }
+}
 
 function dateKey() {
   return new Date().toISOString().slice(0, 10);
@@ -122,6 +160,11 @@ export async function handler(event) {
 
   const menu = await getTodayMenuMessage();
   if (!menu || menu.channel_id !== channel || menu.message_ts !== threadTs) {
+    return { statusCode: 200, body: '' };
+  }
+
+  const mrChefId = await getMrChefSlackUserId();
+  if (!mrChefId || !messageMentionsSlackUser(ev.text, mrChefId)) {
     return { statusCode: 200, body: '' };
   }
 
