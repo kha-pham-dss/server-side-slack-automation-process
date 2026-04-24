@@ -72,10 +72,13 @@ function getDishesSheetNameForCurrentMonth() {
   return `Tháng ${month} / ${year}`;
 }
 
+/** Nội dung DM đúng chuỗi này → không đăng menu, không ghi DynamoDB (collect-orders sẽ không có menu hôm nay). */
+const SKIP_TODAY_DM_TEXT = 'Bỏ qua hôm nay';
+
 /**
  * Get latest message from DM with the given user and parse dishes.
  * Message format: first line = title (e.g. "Thực đơn ngày mai 12/1"), skip; next lines = dish names.
- * Returns [ { id: "0", name: "Dish A" }, ... ] (id = 0-based index).
+ * Returns [ { id: "0", name: "Dish A" }, ... ] (id = 0-based index), or null if DM is {@link SKIP_TODAY_DM_TEXT}.
  */
 async function fetchDishesFromSlackDM(botToken, userId) {
   const openRes = await fetch('https://slack.com/api/conversations.open', {
@@ -102,6 +105,10 @@ async function fetchDishesFromSlackDM(botToken, userId) {
   const messages = histData.messages || [];
   const latest = messages[0];
   if (!latest?.text) throw new Error('No message or empty text in DM with menu source user');
+
+  if (latest.text.trim() === SKIP_TODAY_DM_TEXT) {
+    return null;
+  }
 
   const lines = latest.text.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
   const dishNames = lines.slice(1);
@@ -278,6 +285,10 @@ export async function handler(event) {
 
     const menuDmUserId = config['menu-dm-user-id'] || MENU_DM_USER_ID_DEFAULT;
     const dishes = await fetchDishesFromSlackDM(botToken, menuDmUserId);
+    if (dishes === null) {
+      console.log('PostMenu: DM is "%s"; skipping sheet, channel post, and DynamoDB (collect-orders will skip)', SKIP_TODAY_DM_TEXT);
+      return { ok: true, skipped: true, reason: 'skip_today_dm' };
+    }
     if (!dishes.length) throw new Error('No dishes parsed from latest DM message');
 
     const sheetId = config['sheet-id'];
