@@ -2,6 +2,8 @@
  * PostMenu Lambda (9:30 GMT+7 Mon–Fri).
  * Fetches dishes from latest message in DM with menu source user (skip first line; rest = dish names),
  * updates the sheet with that list, posts menu to Slack channel, stores message_ts in DynamoDB.
+ * On DM "Bỏ qua hôm nay": clears the configured dishes column range on the sheet (when sheet is configured)
+ * so yesterday’s dish names are not left visible; still no Slack post or DynamoDB row.
  */
 
 import { SSMClient, GetParametersByPathCommand } from '@aws-sdk/client-ssm';
@@ -137,6 +139,34 @@ async function updateDishesToSheet(sheets, spreadsheetId, sheetName, rangeSpec, 
 
 const DIGIT_EMOJI = ['one', 'two', 'three', 'four', 'five', 'six'];
 const MAX_DISHES = 6;
+
+function quoteSheetNameForA1(sheetName) {
+  return /[\s']/.test(sheetName) ? `'${sheetName.replace(/'/g, "''")}'` : sheetName;
+}
+
+/** A1 inside tab only, e.g. N3:N8. Single cell N3 → same column, six rows (MAX_DISHES). */
+function expandDishesRangeSpecToInnerA1(rangeSpec) {
+  const spec = (rangeSpec || 'N3:N8').trim();
+  const full = spec.match(/^([A-Za-z]+)(\d+)\s*:\s*([A-Za-z]+)(\d+)$/i);
+  if (full) {
+    const c1 = full[1].toUpperCase();
+    const c2 = full[3].toUpperCase();
+    return `${c1}${full[2]}:${c2}${full[4]}`;
+  }
+  const start = spec.match(/^([A-Za-z]+)(\d+)/i);
+  const col = start ? start[1].toUpperCase() : 'N';
+  const r = start ? parseInt(start[2], 10) : 3;
+  return `${col}${r}:${col}${r + MAX_DISHES - 1}`;
+}
+
+async function clearDishesSheetRange(sheets, spreadsheetId, sheetName, dishesRangeSpec) {
+  const quoted = quoteSheetNameForA1(sheetName);
+  const inner = expandDishesRangeSpecToInnerA1(dishesRangeSpec);
+  await sheets.spreadsheets.values.clear({
+    spreadsheetId,
+    range: `${quoted}!${inner}`,
+  });
+}
 
 function buildSlackBlocks(dishes) {
   const shown = dishes.slice(0, MAX_DISHES);
@@ -286,8 +316,26 @@ export async function handler(event) {
     const menuDmUserId = config['menu-dm-user-id'] || MENU_DM_USER_ID_DEFAULT;
     const dishes = await fetchDishesFromSlackDM(botToken, menuDmUserId);
     if (dishes === null) {
-      console.log('PostMenu: DM is "%s"; skipping sheet, channel post, and DynamoDB (collect-orders will skip)', SKIP_TODAY_DM_TEXT);
-      return { ok: true, skipped: true, reason: 'skip_today_dm' };
+      const sheetId = config['sheet-id'];
+      const credentials = config['sheet-credentials'];
+      let sheetCleared = false;
+      if (sheetId && credentials) {
+        try {
+          const sheetName = config['dishes-sheet-name'] || getDishesSheetNameForCurrentMonth();
+          const dishesRange = config['dishes-range'] || 'N3:N8';
+          const sheets = getSheetsClient(credentials);
+          await clearDishesSheetRange(sheets, sheetId, sheetName, dishesRange);
+          sheetCleared = true;
+          console.log('PostMenu: cleared dishes range on sheet after "%s"', SKIP_TODAY_DM_TEXT);
+        } catch (e) {
+          console.warn('PostMenu: could not clear dishes range on skip', e?.message || e);
+        }
+      }
+      console.log(
+        'PostMenu: DM is "%s"; skipping channel post and DynamoDB (collect-orders / Zalo will skip)',
+        SKIP_TODAY_DM_TEXT
+      );
+      return { ok: true, skipped: true, reason: 'skip_today_dm', sheet_cleared: sheetCleared };
     }
     if (!dishes.length) throw new Error('No dishes parsed from latest DM message');
 

@@ -1,6 +1,8 @@
 /**
  * Read non-empty lines from a sheet column range and send as one Zalo group message.
  * Before Zalo send: reactions.get on today's menu (DynamoDB + bot-token), compare counts to sheet text.
+ * If TABLE_NAME is set and there is no menu row for today (e.g. post-menu skipped on "Bỏ qua hôm nay"),
+ * skips sheet read and Zalo send entirely.
  */
 
 import { DynamoDBClient, GetItemCommand } from '@aws-sdk/client-dynamodb';
@@ -263,6 +265,21 @@ async function reconcileSlackVsSheet(config, lines, bodyForParse) {
  * @returns {Promise<{ ok?: true; skipped?: true; reason?: string }>}
  */
 export async function runFromConfig(config) {
+  const tableName = (process.env.TABLE_NAME || '').trim();
+  if (tableName) {
+    try {
+      const menu = await getTodayMenuRow(tableName);
+      if (!menu) {
+        console.log(
+          'Zalo sheet summary: no menu row for today in DynamoDB; skip sheet + Zalo (e.g. Bỏ qua hôm nay)'
+        );
+        return { skipped: true, reason: 'no_menu_today' };
+      }
+    } catch (e) {
+      console.warn('Zalo sheet summary: DynamoDB menu lookup failed; continuing', e?.message || e);
+    }
+  }
+
   const groupId = (config['zalo-group-id'] || '').trim();
   const cookiesRaw = (config['zalo-cookies-json'] || '').trim();
   const imei = (config['zalo-imei'] || '').trim();
