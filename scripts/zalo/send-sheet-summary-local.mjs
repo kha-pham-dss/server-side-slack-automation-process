@@ -47,6 +47,7 @@ function buildEnvOverrides() {
   if (sheetCreds.trim()) out['sheet-credentials'] = sheetCreds.trim();
   set('dishes-sheet-name', process.env.DISHES_SHEET_NAME);
   set('zalo-summary-range', process.env.ZALO_SUMMARY_RANGE);
+  set('zalo-summary-range-cell', process.env.ZALO_SUMMARY_RANGE_CELL);
 
   return out;
 }

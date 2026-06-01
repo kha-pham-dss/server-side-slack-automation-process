@@ -17,10 +17,15 @@ const ssm = new SSMClient();
 const TABLE_NAME = process.env.TABLE_NAME;
 const COLLECT_ORDERS_FUNCTION_NAME = process.env.COLLECT_ORDERS_FUNCTION_NAME;
 const PARAMETER_PREFIX = process.env.PARAMETER_PREFIX || '/slack-dishes';
+const RECONCILE_NOTIFY_SLACK_USER_ID = 'U02SJRNAM2M';
+const TRACKED_REACTIONS = new Set(['one', 'two', 'three', 'four', 'five', 'six', 'up']);
 
 /** @type {{ value: string | null | undefined; at: number }} */
 let mrChefUserIdCache = { value: undefined, at: 0 };
 const MR_CHEF_CACHE_MS = 60_000;
+/** @type {{ value: string | null | undefined; at: number }} */
+let botTokenCache = { value: undefined, at: 0 };
+const BOT_TOKEN_CACHE_MS = 60_000;
 
 function messageMentionsSlackUser(text, slackUserId) {
   if (!text || !slackUserId) return false;
@@ -56,8 +61,45 @@ async function getMrChefSlackUserId() {
   }
 }
 
+async function getBotToken() {
+  const fromEnv = (process.env.BOT_TOKEN || '').trim();
+  if (fromEnv) return fromEnv;
+
+  if (Date.now() - botTokenCache.at < BOT_TOKEN_CACHE_MS && botTokenCache.value !== undefined) {
+    return botTokenCache.value;
+  }
+
+  try {
+    const res = await ssm.send(
+      new GetParameterCommand({
+        Name: `${PARAMETER_PREFIX}/bot-token`,
+        WithDecryption: true,
+      })
+    );
+    const v = (res.Parameter?.Value ?? '').trim();
+    const token = v || null;
+    botTokenCache = { value: token, at: Date.now() };
+    return token;
+  } catch (e) {
+    if (e?.name === 'ParameterNotFound') {
+      botTokenCache = { value: null, at: Date.now() };
+      return null;
+    }
+    throw e;
+  }
+}
+
 function dateKey() {
   return new Date().toISOString().slice(0, 10);
+}
+
+function isAfterZaloSummaryCutoffNow() {
+  const now = new Date();
+  const gmt7Ms = now.getTime() + 7 * 60 * 60 * 1000;
+  const gmt7 = new Date(gmt7Ms);
+  const hour = gmt7.getUTCHours();
+  const minute = gmt7.getUTCMinutes();
+  return hour > 10 || (hour === 10 && minute >= 45);
 }
 
 async function getSigningSecret() {
@@ -94,6 +136,23 @@ async function getTodayMenuMessage() {
   );
   if (!res.Item) return null;
   return unmarshall(res.Item);
+}
+
+async function postSlackThreadReply(botToken, channelId, threadTs, text) {
+  const res = await fetch('https://slack.com/api/chat.postMessage', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json; charset=utf-8',
+      Authorization: `Bearer ${botToken}`,
+    },
+    body: JSON.stringify({
+      channel: channelId,
+      thread_ts: threadTs,
+      text,
+    }),
+  });
+  const data = await res.json();
+  if (!data.ok) throw new Error(`Slack chat.postMessage: ${data.error ?? res.status}`);
 }
 
 /**
@@ -150,6 +209,31 @@ export async function handler(event) {
   }
 
   const ev = body.event;
+  if (ev?.type === 'reaction_added') {
+    const item = ev.item;
+    const reaction = ev.reaction;
+    const menu = await getTodayMenuMessage();
+    if (!menu) return { statusCode: 200, body: '' };
+    if (item?.type !== 'message' || item.channel !== menu.channel_id || item.ts !== menu.message_ts) {
+      return { statusCode: 200, body: '' };
+    }
+    if (!TRACKED_REACTIONS.has(reaction) || !isAfterZaloSummaryCutoffNow()) {
+      return { statusCode: 200, body: '' };
+    }
+
+    const botToken = await getBotToken();
+    if (!botToken) return { statusCode: 200, body: '' };
+
+    const reconcileUid = (
+      process.env.RECONCILE_NOTIFY_SLACK_USER_ID || RECONCILE_NOTIFY_SLACK_USER_ID
+    ).trim();
+    const ping = reconcileUid ? `<@${reconcileUid}> ` : '';
+    const actor = ev.user ? `<@${ev.user}>` : 'A user';
+    const text = `${ping}${actor} vừa react sau 10:45 (sau khi zalo-sheet-summary chạy). Vui lòng manual re-sent zalo msg.`;
+    await postSlackThreadReply(botToken, menu.channel_id, menu.message_ts, text);
+    return { statusCode: 200, body: '' };
+  }
+
   if (ev?.type !== 'message' || ev.bot_id) {
     return { statusCode: 200, body: '' };
   }

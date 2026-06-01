@@ -28,7 +28,8 @@ Lambda đọc SSM bằng `GetParametersByPath` có **phân trang** (mỗi lần 
 | `/slack-dishes/zalo-imei` | SecureString (optional) | `localStorage.getItem('z_uuid')` trên chat.zalo.me (zca-js gọi là `imei`). |
 | `/slack-dishes/zalo-user-agent` | String (optional) | User-Agent cùng profile trình duyệt đã export cookie. |
 | `/slack-dishes/zalo-language` | String (optional) | Mặc định `vi`. |
-| `/slack-dishes/zalo-summary-range` | String (optional) | Vùng A1 một cột (ví dụ `M58:M72`). Đọc từng ô, **bỏ dòng trống**, nối bằng xuống dòng. Nếu trong vùng có dòng khớp **`Tổng 0 suất`** (regex không phân biệt hoa thường, ví dụ `Tổng 0 suất anh nhé`) thì chỉ gửi tin: `Nay bọn em không đặt gì anh nhé`. Còn lại gửi nguyên nội dung đã nối. Nếu vùng trống và không có dòng tổng → bỏ qua (`empty_range`). |
+| `/slack-dishes/zalo-summary-range-cell` | String (optional) | Ô cấu hình range động trên tab món (mặc định `F70`). Ô này chứa text range, ví dụ `M64:M84` (thường từ công thức `="M"&D67+1&":M"&D67+21`). Lambda đọc ô này trước, rồi đọc vùng đó để gửi Zalo. |
+| `/slack-dishes/zalo-summary-range` | String (optional) | **Fallback** vùng A1 một cột cố định (ví dụ `M58:M72`) khi ô `zalo-summary-range-cell` trống/sai. **Không** đặt `F70` ở đây — `F70` là ô config, không phải vùng nội dung. |
 
 **Ghi chú:** Lambda `slack-dishes-zalo-sheet-summary` chạy **11:00 GMT+7** (T2–T6). Cấu hình chạy tay trên máy: xem `.env.tmp` → copy thành `.env`. API Zalo không chính thức — rủi ro tài khoản; xem [zca-js](https://github.com/RFS-ADRENO/zca-js).
 

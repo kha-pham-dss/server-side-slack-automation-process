@@ -10,7 +10,9 @@ import { unmarshall } from '@aws-sdk/util-dynamodb';
 import { google } from 'googleapis';
 import { Zalo, ThreadType } from 'zca-js';
 
-const DIGIT_EMOJI = ['one', 'two', 'three', 'four', 'five', 'six'];
+/** TODO: set false trước khi deploy — tạm thời chỉ log, không gửi Zalo. */
+const ZALO_SEND_DISABLED = false;
+
 
 /** @mention trong reply thread menu khi đối chiếu lệch. Ghi đè: RECONCILE_NOTIFY_SLACK_USER_ID. */
 const RECONCILE_NOTIFY_SLACK_USER_ID = 'U02SJRNAM2M';
@@ -116,6 +118,107 @@ export async function fetchNonEmptyLinesFromRange(sheets, spreadsheetId, sheetNa
     if (s) lines.push(s);
   }
   return lines;
+}
+
+/**
+ * Read one config cell from the same sheet tab.
+ * Useful for dynamic ranges like storing "M62:M82" in F70.
+ *
+ * @param {import('googleapis').sheets_v4.Sheets} sheets
+ * @param {string} spreadsheetId
+ * @param {string} sheetName
+ * @param {string} configCell e.g. F70
+ * @returns {Promise<string>} trimmed cell text or empty
+ */
+export async function fetchSingleCellText(sheets, spreadsheetId, sheetName, configCell) {
+  const quoted = /[\s']/.test(sheetName) ? `'${sheetName.replace(/'/g, "''")}'` : sheetName;
+  const range = `${quoted}!${configCell}`;
+  const res = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range,
+    majorDimension: 'ROWS',
+  });
+  const value = res.data.values?.[0]?.[0];
+  return value != null ? String(value).trim() : '';
+}
+
+function normalizeRangeCandidate(raw) {
+  const s = (raw || '').trim();
+  if (!s) return '';
+  const bang = s.lastIndexOf('!');
+  const candidate = bang >= 0 ? s.slice(bang + 1) : s;
+  return candidate.replace(/\s+/g, '').trim();
+}
+
+/** Single A1 cell ref (F70), not a column range. */
+function looksLikeSingleCellRef(raw) {
+  return /^[A-Za-z]{1,3}[1-9]\d*$/.test(normalizeRangeCandidate(raw));
+}
+
+function looksLikeSingleColumnRange(raw) {
+  return /^[A-Za-z]+[1-9]\d*:[A-Za-z]+[1-9]\d*$/.test(normalizeRangeCandidate(raw));
+}
+
+/**
+ * Resolve content range: read config cell (default F70) for text like M64:M84, then read that range.
+ * Never treat a single cell (e.g. F70) as the content range — that would send the range string itself.
+ *
+ * @param {Record<string, string>} config
+ * @param {import('googleapis').sheets_v4.Sheets} sheets
+ * @param {string} spreadsheetId
+ * @param {string} sheetName
+ * @returns {Promise<string>}
+ */
+export async function resolveSummaryCellRange(config, sheets, spreadsheetId, sheetName) {
+  const staticFallback = (config['zalo-summary-range'] || 'M58:M72').trim();
+  let configCell = (config['zalo-summary-range-cell'] || 'F70').trim();
+
+  // Legacy: user put F70 in zalo-summary-range instead of zalo-summary-range-cell.
+  if (looksLikeSingleCellRef(staticFallback) && !config['zalo-summary-range-cell']?.trim()) {
+    configCell = staticFallback;
+  }
+
+  if (configCell && looksLikeSingleCellRef(configCell)) {
+    try {
+      const dynamicRaw = await fetchSingleCellText(sheets, spreadsheetId, sheetName, configCell);
+      const dynamicRange = normalizeRangeCandidate(dynamicRaw);
+      if (looksLikeSingleColumnRange(dynamicRange)) {
+        console.log('Zalo sheet summary: content range', dynamicRange, 'from cell', configCell);
+        return dynamicRange;
+      }
+      if (dynamicRaw) {
+        console.warn(
+          'Zalo sheet summary: cell',
+          configCell,
+          'is not a column range:',
+          dynamicRaw
+        );
+      } else {
+        console.warn('Zalo sheet summary: cell', configCell, 'is empty');
+      }
+    } catch (e) {
+      console.warn(
+        'Zalo sheet summary: failed reading config cell',
+        configCell,
+        e?.message || e
+      );
+    }
+  }
+
+  if (looksLikeSingleColumnRange(staticFallback)) {
+    console.log('Zalo sheet summary: using static fallback range', staticFallback);
+    return normalizeRangeCandidate(staticFallback);
+  }
+
+  if (looksLikeSingleCellRef(staticFallback)) {
+    console.warn(
+      'Zalo sheet summary: zalo-summary-range is a cell ref',
+      staticFallback,
+      'but could not resolve — check F70 formula and zalo-summary-range-cell'
+    );
+  }
+
+  return 'M58:M72';
 }
 
 /** Tìm số suất trong dòng kiểu "Tổng 8 suất anh nhé" / "tổng 0 suất" (không phân biệt hoa thường). */
@@ -285,7 +388,10 @@ export async function runFromConfig(config) {
   const imei = (config['zalo-imei'] || '').trim();
   const userAgent = (config['zalo-user-agent'] || '').trim();
 
-  if (!groupId || !cookiesRaw || !imei || !userAgent) {
+  if (
+    !ZALO_SEND_DISABLED &&
+    (!groupId || !cookiesRaw || !imei || !userAgent)
+  ) {
     console.warn('Zalo sheet summary: missing zalo-group-id, zalo-cookies-json, zalo-imei, or zalo-user-agent');
     return { skipped: true, reason: 'incomplete_zalo_or_sheet_config' };
   }
@@ -305,9 +411,10 @@ export async function runFromConfig(config) {
   }
 
   const sheetName = (config['dishes-sheet-name'] || '').trim() || getDishesSheetNameForCurrentMonth();
-  const cellRange = (config['zalo-summary-range'] || 'M58:M72').trim();
 
   const sheets = getSheetsClient(credentials);
+  const cellRange = await resolveSummaryCellRange(config, sheets, sheetId, sheetName);
+
   const lines = await fetchNonEmptyLinesFromRange(sheets, sheetId, sheetName, cellRange);
   const body = lines.join('\n').trim();
   const totalServings = parseTotalServings(lines);
@@ -320,6 +427,14 @@ export async function runFromConfig(config) {
     noOrders = true;
     console.log('Zalo sheet summary: Tổng 0 suất — sending no-order message');
   } else if (body) {
+    if (lines.length === 1 && looksLikeSingleColumnRange(lines[0])) {
+      console.warn(
+        'Zalo sheet summary: content looks like unresolved range text',
+        lines[0],
+        '— check zalo-summary-range-cell (F70) and formula'
+      );
+      return { skipped: true, reason: 'range_not_resolved' };
+    }
     msg = body;
   } else {
     console.warn('Zalo sheet summary: no text in', cellRange, 'and no Tổng … suất line');
@@ -332,6 +447,22 @@ export async function runFromConfig(config) {
   }
   if (!reconcile.skipped && reconcile.notify_mismatch && config['bot-token']?.trim()) {
     await notifyReconcileMismatchOnSlack(config['bot-token'].trim(), reconcile);
+  }
+
+  if (ZALO_SEND_DISABLED) {
+    console.log(
+      `Zalo sheet summary [dry-run] range=${cellRange} lines=${lines.length} msg=${JSON.stringify(msg)}`
+    );
+    return {
+      ok: true,
+      dry_run: true,
+      range: cellRange,
+      line_count: lines.length,
+      no_orders: noOrders,
+      total_servings: totalServings,
+      msg,
+      slack_reconcile: reconcile,
+    };
   }
 
   let cookie;
