@@ -17,6 +17,9 @@ const ZALO_SEND_DISABLED = false;
 /** @mention trong reply thread menu khi đối chiếu lệch. Ghi đè: RECONCILE_NOTIFY_SLACK_USER_ID. */
 const RECONCILE_NOTIFY_SLACK_USER_ID = 'U02SJRNAM2M';
 
+/** Slack emoji names :one:..:six: (cùng post-menu / collect-orders). */
+const DIGIT_EMOJI = ['one', 'two', 'three', 'four', 'five', 'six'];
+
 const dynamo = new DynamoDBClient();
 
 /** Cùng khóa ngày với post-menu / collect-orders (UTC YYYY-MM-DD). */
