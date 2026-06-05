@@ -1,7 +1,8 @@
 /**
  * Slack Events API endpoint (Lambda Function URL).
  * - url_verification: return challenge.
- * - message in thread under today's menu: only if the message @-mentions Mr.Chef (Slack user id from MR_CHEF_SLACK_USER_ID or SSM /slack-dishes/mr-chef-user-id); then invoke CollectOrders (sheet + :white_check_mark: on the reply).
+ * - Reply trong thread menu + @Mr.Chef → CollectOrders (sheet + :white_check_mark: trên reply).
+ * - Cùng luồng đó nhưng sau 10:45 GMT+7 → thêm thread reply @RECONCILE_NOTIFY_SLACK_USER_ID (nhắc re-send Zalo).
  */
 
 import crypto from 'crypto';
@@ -18,7 +19,6 @@ const TABLE_NAME = process.env.TABLE_NAME;
 const COLLECT_ORDERS_FUNCTION_NAME = process.env.COLLECT_ORDERS_FUNCTION_NAME;
 const PARAMETER_PREFIX = process.env.PARAMETER_PREFIX || '/slack-dishes';
 const RECONCILE_NOTIFY_SLACK_USER_ID = 'U02SJRNAM2M';
-const TRACKED_REACTIONS = new Set(['one', 'two', 'three', 'four', 'five', 'six', 'up']);
 
 /** @type {{ value: string | null | undefined; at: number }} */
 let mrChefUserIdCache = { value: undefined, at: 0 };
@@ -91,6 +91,19 @@ async function getBotToken() {
 
 function dateKey() {
   return new Date().toISOString().slice(0, 10);
+}
+
+/** So khớp ts menu (DynamoDB) với reaction item.ts dù Slack khác độ chính xác chuỗi. */
+function normalizeSlackTs(ts) {
+  if (ts == null || ts === '') return '';
+  const n = parseFloat(String(ts));
+  return Number.isFinite(n) ? n.toFixed(6) : String(ts).trim();
+}
+
+function isReplyUnderTodayMenu(channel, threadTs, menu) {
+  if (!menu) return false;
+  if (String(channel || '').trim() !== String(menu.channel_id || '').trim()) return false;
+  return normalizeSlackTs(threadTs) === normalizeSlackTs(menu.message_ts);
 }
 
 function isAfterZaloSummaryCutoffNow() {
@@ -209,31 +222,6 @@ export async function handler(event) {
   }
 
   const ev = body.event;
-  if (ev?.type === 'reaction_added') {
-    const item = ev.item;
-    const reaction = ev.reaction;
-    const menu = await getTodayMenuMessage();
-    if (!menu) return { statusCode: 200, body: '' };
-    if (item?.type !== 'message' || item.channel !== menu.channel_id || item.ts !== menu.message_ts) {
-      return { statusCode: 200, body: '' };
-    }
-    if (!TRACKED_REACTIONS.has(reaction) || !isAfterZaloSummaryCutoffNow()) {
-      return { statusCode: 200, body: '' };
-    }
-
-    const botToken = await getBotToken();
-    if (!botToken) return { statusCode: 200, body: '' };
-
-    const reconcileUid = (
-      process.env.RECONCILE_NOTIFY_SLACK_USER_ID || RECONCILE_NOTIFY_SLACK_USER_ID
-    ).trim();
-    const ping = reconcileUid ? `<@${reconcileUid}> ` : '';
-    const actor = ev.user ? `<@${ev.user}>` : 'A user';
-    const text = `${ping}${actor} vừa react sau 10:45 (sau khi zalo-sheet-summary chạy). Vui lòng manual re-sent zalo msg.`;
-    await postSlackThreadReply(botToken, menu.channel_id, menu.message_ts, text);
-    return { statusCode: 200, body: '' };
-  }
-
   if (ev?.type !== 'message' || ev.bot_id) {
     return { statusCode: 200, body: '' };
   }
@@ -243,7 +231,7 @@ export async function handler(event) {
   const replyTs = ev.ts;
 
   const menu = await getTodayMenuMessage();
-  if (!menu || menu.channel_id !== channel || menu.message_ts !== threadTs) {
+  if (!isReplyUnderTodayMenu(channel, threadTs, menu)) {
     return { statusCode: 200, body: '' };
   }
 
@@ -253,5 +241,23 @@ export async function handler(event) {
   }
 
   await invokeCollectOrders(channel, replyTs);
+
+  if (isAfterZaloSummaryCutoffNow()) {
+    const botToken = await getBotToken();
+    if (botToken) {
+      const reconcileUid = (
+        process.env.RECONCILE_NOTIFY_SLACK_USER_ID || RECONCILE_NOTIFY_SLACK_USER_ID
+      ).trim();
+      const ping = reconcileUid ? `<@${reconcileUid}> ` : '';
+      const actor = ev.user ? `<@${ev.user}>` : 'A user';
+      const text = `${ping}${actor} vừa @ bot sau 10:45 (sau khi zalo-sheet-summary chạy). Vui lòng manual re-sent zalo msg.`;
+      postSlackThreadReply(botToken, menu.channel_id, menu.message_ts, text)
+        .then(() => console.log('menu @mention after 10:45: posted reconcile ping', { user: ev.user }))
+        .catch((e) => console.warn('menu @mention after 10:45: ping failed', e?.message || e));
+    } else {
+      console.warn('menu @mention after 10:45: no bot-token for reconcile ping');
+    }
+  }
+
   return { statusCode: 200, body: '' };
 }

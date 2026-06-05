@@ -17,6 +17,7 @@ AWS SAM template for **Option A**: scheduled Lambdas (9:30 PostMenu, 10:20 Colle
    npm install --prefix serverless/collect-orders
    npm install --prefix serverless/slack-events
    npm install --prefix serverless/zalo-sheet-summary
+   npm install --prefix serverless/sync-slack-ids
    ```
 3. Build and deploy:
    ```bash
@@ -29,7 +30,7 @@ AWS SAM template for **Option A**: scheduled Lambdas (9:30 PostMenu, 10:20 Colle
 ## Resources
 
 - **DynamoDB:** `slack-dishes-menu-message` (partition key: `date` = YYYY-MM-DD)
-- **Lambdas:** `slack-dishes-post-menu`, `slack-dishes-collect-orders`, `slack-dishes-zalo-sheet-summary`, optional `slack-dishes-slack-events` (Function URL)
+- **Lambdas:** `slack-dishes-post-menu`, `slack-dishes-collect-orders`, `slack-dishes-sync-slack-ids` (manual: fill Slack user ID column on sheet), `slack-dishes-zalo-sheet-summary`, optional `slack-dishes-slack-events` (Function URL)
 - **EventBridge:** `post-menu-daily`, `collect-orders-daily`, `zalo-sheet-summary-daily` (10:45 GMT+7; see `template.yaml` for UTC cron)
 
 ## Timezone

@@ -97,29 +97,91 @@ export function getDishesSheetNameForCurrentMonth() {
   return `Tháng ${month} / ${year}`;
 }
 
+/** Dòng tổng suất trên sheet (nhiều biến thể chữ). */
+const TOTAL_LINE_RE = /tổng\s*:?\s*\d+\s*suất/i;
+
 /**
+ * @param {string} a1Range e.g. M58:M72
+ * @returns {{ col: string; startRow: number; endRow: number } | null}
+ */
+export function parseSingleColumnRange(a1Range) {
+  const norm = normalizeRangeCandidate(a1Range);
+  const m = norm.match(/^([A-Za-z]+)(\d+):([A-Za-z]+)(\d+)$/i);
+  if (!m || m[1].toUpperCase() !== m[3].toUpperCase()) return null;
+  return {
+    col: m[1].toUpperCase(),
+    startRow: parseInt(m[2], 10),
+    endRow: parseInt(m[4], 10),
+  };
+}
+
+/**
+ * Đọc từng ô theo hàng (batchGet) — tránh lệch index khi API bỏ dòng trống giữa range.
+ * Ví dụ M61:M81 phải đọc đúng M75 (dòng Tổng), không phụ thuộc vị trí trong mảng thưa.
+ *
  * @param {import('googleapis').sheets_v4.Sheets} sheets
  * @param {string} spreadsheetId
  * @param {string} sheetName
- * @param {string} a1Range e.g. M58:M72
+ * @param {string} a1Range e.g. M61:M81
  * @returns {string[]} non-empty trimmed lines in row order
  */
 export async function fetchNonEmptyLinesFromRange(sheets, spreadsheetId, sheetName, a1Range) {
   const quoted = /[\s']/.test(sheetName) ? `'${sheetName.replace(/'/g, "''")}'` : sheetName;
-  const range = `${quoted}!${a1Range}`;
-  const res = await sheets.spreadsheets.values.get({
+  const bounds = parseSingleColumnRange(a1Range);
+  const valueOpts = { valueRenderOption: 'FORMATTED_VALUE' };
+
+  if (!bounds) {
+    const range = `${quoted}!${normalizeRangeCandidate(a1Range)}`;
+    const res = await sheets.spreadsheets.values.get({
+      spreadsheetId,
+      range,
+      majorDimension: 'ROWS',
+      ...valueOpts,
+    });
+    const rows = res.data.values || [];
+    /** @type {string[]} */
+    const lines = [];
+    for (const row of rows) {
+      const s = row?.[0] != null ? String(row[0]).trim() : '';
+      if (s) lines.push(s);
+    }
+    return lines;
+  }
+
+  const { col, startRow, endRow } = bounds;
+  /** @type {string[]} */
+  const cellRefs = [];
+  for (let r = startRow; r <= endRow; r++) {
+    cellRefs.push(`${quoted}!${col}${r}`);
+  }
+
+  const batch = await sheets.spreadsheets.values.batchGet({
     spreadsheetId,
-    range,
-    majorDimension: 'ROWS',
+    ranges: cellRefs,
+    ...valueOpts,
   });
-  const rows = res.data.values || [];
+  const valueRanges = batch.data.valueRanges || [];
+
   /** @type {string[]} */
   const lines = [];
-  for (const row of rows) {
-    const cell = row?.[0];
-    const s = cell != null ? String(cell).trim() : '';
+  for (let i = 0; i < cellRefs.length; i++) {
+    const vr = valueRanges[i];
+    let s = vr?.values?.[0]?.[0] != null ? String(vr.values[0][0]).trim() : '';
+    if (!s) {
+      const r = startRow + i;
+      s = await fetchSingleCellText(sheets, spreadsheetId, sheetName, `${col}${r}`);
+    }
     if (s) lines.push(s);
   }
+
+  const hasTotal = lines.some((l) => TOTAL_LINE_RE.test(l));
+  console.log(
+    'Zalo sheet summary:',
+    a1Range,
+    `→ ${lines.length} line(s)`,
+    hasTotal ? '(có dòng Tổng)' : '(chưa thấy dòng Tổng)'
+  );
+
   return lines;
 }
 
@@ -140,6 +202,7 @@ export async function fetchSingleCellText(sheets, spreadsheetId, sheetName, conf
     spreadsheetId,
     range,
     majorDimension: 'ROWS',
+    valueRenderOption: 'FORMATTED_VALUE',
   });
   const value = res.data.values?.[0]?.[0];
   return value != null ? String(value).trim() : '';
@@ -224,9 +287,9 @@ export async function resolveSummaryCellRange(config, sheets, spreadsheetId, she
   return 'M58:M72';
 }
 
-/** Tìm số suất trong dòng kiểu "Tổng 8 suất anh nhé" / "tổng 0 suất" (không phân biệt hoa thường). */
+/** Tìm số suất trong dòng kiểu "Tổng 8 suất", "Tổng: 8 suất", "tổng 0 suất". */
 export function parseTotalServings(lines) {
-  const re = /Tổng\s*(\d+)\s*suất/i;
+  const re = /tổng\s*:?\s*(\d+)\s*suất/i;
   let last = null;
   for (const line of lines) {
     const m = line.match(re);

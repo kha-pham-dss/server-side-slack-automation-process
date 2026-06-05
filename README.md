@@ -56,7 +56,7 @@ Timeline (Mon–Fri only):
 
 ## Deploy
 
-From repo root: `make deploy` (or `cd iac && sam build && sam deploy --guided`). Create SSM parameters under `/slack-dishes/` before first run (see `iac/config/parameter-store-keys.md`). For Slack Events (reply-under-menu → re-run CollectOrders), add `/slack-dishes/signing-secret` and in the Slack app set **Event Subscriptions** Request URL to the deployed **SlackEventsFunctionUrl** (output after deploy), and subscribe to **message.channels** (and **message.groups** if you use private channels).
+From repo root: `make deploy` (or `cd iac && sam build && sam deploy --guided`). Create SSM parameters under `/slack-dishes/` before first run (see `iac/config/parameter-store-keys.md`). For Slack Events (reply-under-menu → re-run CollectOrders), add `/slack-dishes/signing-secret` and in the Slack app set **Event Subscriptions** Request URL to the deployed **SlackEventsFunctionUrl** (output after deploy). Subscribe to **message.channels** (and **message.groups** if private channel). Sau 10:45 GMT+7, reply dưới menu có @Mr.Chef → CollectOrders + ping `@RECONCILE_NOTIFY_SLACK_USER_ID`.
 
 For **Zalo** daily summary: set Zalo-related SSM keys (`zalo-group-id`, `zalo-cookies-json`, `zalo-imei`, `zalo-user-agent`, plus sheet keys used for the summary range). The Zalo Lambda uses the same **`bot-token`** and **`TABLE_NAME`** (SAM-provided) as the menu flow so it can call `reactions.get` and post a **thread reply** on mismatch. Optional env **`RECONCILE_NOTIFY_SLACK_USER_ID`** overrides the default Slack user id mentioned in that reply. Local dry run: `scripts/zalo/send-sheet-summary-local.mjs` (see comment in script for optional `TABLE_NAME` to enable the Slack reconcile step).
 

@@ -9,7 +9,7 @@ Lambda đọc SSM bằng `GetParametersByPath` có **phân trang** (mỗi lần 
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `/slack-dishes/bot-token` | SecureString | Slack Bot User OAuth Token (xoxb-...). Scopes: `chat:write`, `reactions:read`, `reactions:write`, `users:read`, `im:write`, `im:history` (DM to read menu from menu source user). |
-| `/slack-dishes/signing-secret` | SecureString | Slack Signing Secret (from app Basic Information). Required for Slack Events API endpoint (SlackEvents Lambda) to verify requests. |
+| `/slack-dishes/signing-secret` | SecureString | Slack Signing Secret (from app Basic Information). Required for Slack Events API endpoint (SlackEvents Lambda) to verify requests. Slack app Event Subscriptions: **message.channels** (+ **message.groups** nếu kênh private). Sau 10:45 GMT+7, @Mr.Chef dưới menu → CollectOrders + ping reconcile user. |
 | `/slack-dishes/channel-id` | String | Target Slack channel ID where the menu is posted |
 | `/slack-dishes/menu-dm-user-id` | String (optional) | Slack user ID whose **latest DM message** is used as menu source (first line = title, skip; rest = dish names). Default: `U02SJRNAM2M`. |
 | `/slack-dishes/webhook-url` | SecureString (optional) | Incoming Webhook URL; if set, PostMenu posts via webhook instead of chat.postMessage |
@@ -18,6 +18,8 @@ Lambda đọc SSM bằng `GetParametersByPath` có **phân trang** (mỗi lần 
 | `/slack-dishes/dishes-sheet-name` | String (optional) | Tab/sheet name for dishes list and orders. If not set: `Tháng {month} / {year}` (e.g. `Tháng 2 / 2026`) from current UTC date. |
 | `/slack-dishes/dishes-range` | String (optional) | A1 range where PostMenu **writes** the dish list from DM (e.g. `N4:N8`). Default: `N3:N8`. |
 | `/slack-dishes/orders-user-range` | String (optional) | A1 range cột tên user (e.g. `A15:A100`). Default: `A15:A100`. |
+| `/slack-dishes/orders-slack-id-column` | String (optional) | Cột **Slack user ID** (`U…`), mặc định `BZ`. Cùng hàng với `orders-user-range` (vd. `A15:A100` → `BZ15:BZ100`). **CollectOrders** đọc cột này để khớp order; **SyncSlackIds** Lambda (gọi tay) ghi ID từ tên sheet + Slack. |
+| `/slack-dishes/orders-slack-id-range` | String (optional) | **Legacy:** full A1 range (e.g. `AA15:AA100`). Nếu set thì dùng thay cho `orders-slack-id-column`. |
 | `/slack-dishes/orders-date-row` | String (optional) | Row number for day header (merged 2 cells = one day). Default: `12`. |
 | `/slack-dishes/orders-column-start` | String (optional) | First column for orders (each day = 2 cols: dish number, price). Default: `B`. |
 | `/slack-dishes/orders-default-price` | String (optional) | Giá mặc định mỗi suất (VND). Default: `35000`. |
@@ -48,6 +50,7 @@ aws ssm put-parameter --name /slack-dishes/sheet-credentials --value "$(cat path
 # aws ssm put-parameter --name /slack-dishes/dishes-sheet-name --value "Dishes" --type String
 # aws ssm put-parameter --name /slack-dishes/dishes-range --value "N3:N8" --type String
 # aws ssm put-parameter --name /slack-dishes/orders-user-range --value "A15:A100" --type String
+# aws ssm put-parameter --name /slack-dishes/orders-slack-id-column --value "BZ" --type String
 # aws ssm put-parameter --name /slack-dishes/orders-date-row --value "12" --type String
 # aws ssm put-parameter --name /slack-dishes/orders-column-start --value "B" --type String
 # aws ssm put-parameter --name /slack-dishes/orders-default-price --value "35000" --type String

@@ -64,13 +64,39 @@ Resources:
             Description: Invoke PostMenu at 9:30 GMT+7 (VNT)
             Enabled: true
 
+  SyncSlackIdsFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: slack-dishes-sync-slack-ids
+      CodeUri: ../serverless/sync-slack-ids
+      Handler: index.handler
+      Description: Manual invoke; maps sheet user names to Slack users.list and writes Slack user IDs to orders-slack-id-column (default BZ), same rows as orders-user-range.
+      Environment:
+        Variables:
+          PARAMETER_PREFIX: /slack-dishes
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - ssm:GetParameter
+                - ssm:GetParameters
+                - ssm:GetParametersByPath
+              Resource:
+                - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/slack-dishes'
+                - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/slack-dishes/*'
+
   CollectOrdersFunction:
     Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
     Properties:
       FunctionName: slack-dishes-collect-orders
       CodeUri: ../serverless/collect-orders
       Handler: index.handler
-      Description: Runs at 10:20 GMT+7 (VNT); reads menu message from DynamoDB, calls reactions.get, resolves user_id to name (users.list), writes orders to Google Sheet by user row. Can be invoked by schedule or by SlackEvents when user replies under menu.
+      Description: Runs at 10:20 GMT+7 (VNT); reads menu message from DynamoDB, calls reactions.get, writes orders to Google Sheet (match Slack ID column BZ or name aliases). Can be invoked by schedule or by SlackEvents when user replies under menu.
       Environment:
         Variables:
           TABLE_NAME: !Ref MenuMessageTable
@@ -140,7 +166,7 @@ Resources:
       FunctionName: slack-dishes-slack-events
       CodeUri: ../serverless/slack-events
       Handler: index.handler
-      Description: Receives Slack Events API; if message is a reply under today's menu post and (when configured) @-mentions Mr.Chef, invokes CollectOrders (sheet + white_check_mark).
+      Description: Receives Slack Events API; menu-thread @Mr.Chef → CollectOrders; after 10:45 GMT+7 same @mention also pings RECONCILE_NOTIFY_SLACK_USER_ID in thread.
       Environment:
         Variables:
           TABLE_NAME: !Ref MenuMessageTable
@@ -148,6 +174,8 @@ Resources:
           PARAMETER_PREFIX: /slack-dishes
           # Slack user id (e.g. U01ABC…) for Mr.Chef; menu-thread replies must @-mention this user to trigger CollectOrders. Override SSM /slack-dishes/mr-chef-user-id when non-empty.
           MR_CHEF_SLACK_USER_ID: ''
+          # @mention khi user @ bot dưới menu sau 10:45 GMT+7 (sau Zalo summary). Để trống = default trong code.
+          RECONCILE_NOTIFY_SLACK_USER_ID: 'U02SJRNAM2M'
       Policies:
         - Version: '2012-10-17'
           Statement:
@@ -185,6 +213,9 @@ Outputs:
   CollectOrdersFunctionArn:
     Description: CollectOrders Lambda ARN
     Value: !GetAtt CollectOrdersFunction.Arn
+  SyncSlackIdsFunctionArn:
+    Description: SyncSlackIds Lambda ARN (invoke manually to fill Slack user ID column on sheet)
+    Value: !GetAtt SyncSlackIdsFunction.Arn
   ZaloSheetSummaryFunctionArn:
     Description: Zalo sheet summary Lambda ARN
     Value: !GetAtt ZaloSheetSummaryFunction.Arn
