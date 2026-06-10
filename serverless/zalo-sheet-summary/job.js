@@ -97,27 +97,31 @@ export function getDishesSheetNameForCurrentMonth() {
   return `Tháng ${month} / ${year}`;
 }
 
-/** Dòng tổng suất trên sheet (nhiều biến thể chữ). */
-const TOTAL_LINE_RE = /tổng\s*:?\s*\d+\s*suất/i;
+/** Dòng tổng suất — "Tổng 8 suất", "Tổng: 8 suất", "Tổng cộng 8 suất anh nhé". */
+const TOTAL_LINE_RE = /tổng[^.\n]{0,48}\d+[^.\n]{0,24}suất/i;
 
-/**
- * @param {string} a1Range e.g. M58:M72
- * @returns {{ col: string; startRow: number; endRow: number } | null}
- */
-export function parseSingleColumnRange(a1Range) {
-  const norm = normalizeRangeCandidate(a1Range);
-  const m = norm.match(/^([A-Za-z]+)(\d+):([A-Za-z]+)(\d+)$/i);
-  if (!m || m[1].toUpperCase() !== m[3].toUpperCase()) return null;
-  return {
-    col: m[1].toUpperCase(),
-    startRow: parseInt(m[2], 10),
-    endRow: parseInt(m[4], 10),
-  };
+function normCellText(s) {
+  return String(s ?? '')
+    .normalize('NFC')
+    .trim();
+}
+
+function isTotalServingsLine(s) {
+  return TOTAL_LINE_RE.test(normCellText(s));
+}
+
+/** Nới hơn regex — "Tổng suất 8", text có cả hai từ. */
+function looksLikeTotalLine(s) {
+  const t = normCellText(s).toLowerCase();
+  return t.includes('tổng') && t.includes('suất');
+}
+
+function quoteSheetTabName(sheetName) {
+  return /[\s']/.test(sheetName) ? `'${sheetName.replace(/'/g, "''")}'` : sheetName;
 }
 
 /**
- * Đọc từng ô theo hàng (batchGet) — tránh lệch index khi API bỏ dòng trống giữa range.
- * Ví dụ M61:M81 phải đọc đúng M75 (dòng Tổng), không phụ thuộc vị trí trong mảng thưa.
+ * Một lần values.get theo range (vd. M61:M81 từ F70 / zalo-summary-range).
  *
  * @param {import('googleapis').sheets_v4.Sheets} sheets
  * @param {string} spreadsheetId
@@ -126,62 +130,38 @@ export function parseSingleColumnRange(a1Range) {
  * @returns {string[]} non-empty trimmed lines in row order
  */
 export async function fetchNonEmptyLinesFromRange(sheets, spreadsheetId, sheetName, a1Range) {
-  const quoted = /[\s']/.test(sheetName) ? `'${sheetName.replace(/'/g, "''")}'` : sheetName;
-  const bounds = parseSingleColumnRange(a1Range);
-  const valueOpts = { valueRenderOption: 'FORMATTED_VALUE' };
-
-  if (!bounds) {
-    const range = `${quoted}!${normalizeRangeCandidate(a1Range)}`;
-    const res = await sheets.spreadsheets.values.get({
-      spreadsheetId,
-      range,
-      majorDimension: 'ROWS',
-      ...valueOpts,
-    });
-    const rows = res.data.values || [];
-    /** @type {string[]} */
-    const lines = [];
-    for (const row of rows) {
-      const s = row?.[0] != null ? String(row[0]).trim() : '';
-      if (s) lines.push(s);
-    }
-    return lines;
-  }
-
-  const { col, startRow, endRow } = bounds;
-  /** @type {string[]} */
-  const cellRefs = [];
-  for (let r = startRow; r <= endRow; r++) {
-    cellRefs.push(`${quoted}!${col}${r}`);
-  }
-
-  const batch = await sheets.spreadsheets.values.batchGet({
+  const quoted = quoteSheetTabName(sheetName);
+  const norm = normalizeRangeCandidate(a1Range);
+  const res = await sheets.spreadsheets.values.get({
     spreadsheetId,
-    ranges: cellRefs,
-    ...valueOpts,
+    range: `${quoted}!${norm}`,
+    majorDimension: 'ROWS',
+    valueRenderOption: 'FORMATTED_VALUE',
   });
-  const valueRanges = batch.data.valueRanges || [];
+
+  console.log(
+    'Zalo sheet summary: requested',
+    norm,
+    '| API returned:',
+    res.data.range ?? '—',
+    '| rows:',
+    res.data.values?.length ?? 0
+  );
 
   /** @type {string[]} */
   const lines = [];
-  for (let i = 0; i < cellRefs.length; i++) {
-    const vr = valueRanges[i];
-    let s = vr?.values?.[0]?.[0] != null ? String(vr.values[0][0]).trim() : '';
-    if (!s) {
-      const r = startRow + i;
-      s = await fetchSingleCellText(sheets, spreadsheetId, sheetName, `${col}${r}`);
-    }
+  for (const row of res.data.values || []) {
+    const s = row?.[0] != null ? normCellText(row[0]) : '';
     if (s) lines.push(s);
   }
 
-  const hasTotal = lines.some((l) => TOTAL_LINE_RE.test(l));
+  const hasTotal = lines.some((l) => looksLikeTotalLine(l));
   console.log(
     'Zalo sheet summary:',
     a1Range,
     `→ ${lines.length} line(s)`,
     hasTotal ? '(có dòng Tổng)' : '(chưa thấy dòng Tổng)'
   );
-
   return lines;
 }
 
@@ -196,16 +176,15 @@ export async function fetchNonEmptyLinesFromRange(sheets, spreadsheetId, sheetNa
  * @returns {Promise<string>} trimmed cell text or empty
  */
 export async function fetchSingleCellText(sheets, spreadsheetId, sheetName, configCell) {
-  const quoted = /[\s']/.test(sheetName) ? `'${sheetName.replace(/'/g, "''")}'` : sheetName;
-  const range = `${quoted}!${configCell}`;
+  const quoted = quoteSheetTabName(sheetName);
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId,
-    range,
+    range: `${quoted}!${configCell}`,
     majorDimension: 'ROWS',
     valueRenderOption: 'FORMATTED_VALUE',
   });
   const value = res.data.values?.[0]?.[0];
-  return value != null ? String(value).trim() : '';
+  return value != null ? normCellText(value) : '';
 }
 
 function normalizeRangeCandidate(raw) {
@@ -289,10 +268,10 @@ export async function resolveSummaryCellRange(config, sheets, spreadsheetId, she
 
 /** Tìm số suất trong dòng kiểu "Tổng 8 suất", "Tổng: 8 suất", "tổng 0 suất". */
 export function parseTotalServings(lines) {
-  const re = /tổng\s*:?\s*(\d+)\s*suất/i;
+  const re = /tổng[^.\n]{0,48}(\d+)[^.\n]{0,24}suất/i;
   let last = null;
   for (const line of lines) {
-    const m = line.match(re);
+    const m = normCellText(line).match(re);
     if (m) last = parseInt(m[1], 10);
   }
   return last;
@@ -484,11 +463,12 @@ export async function runFromConfig(config) {
   const lines = await fetchNonEmptyLinesFromRange(sheets, sheetId, sheetName, cellRange);
   const body = lines.join('\n').trim();
   const totalServings = parseTotalServings(lines);
+  const hasDishLines = lines.some((l) => !looksLikeTotalLine(l));
   const noOrdersMsg = 'Nay bọn em không đặt gì anh nhé';
 
   let msg;
   let noOrders = false;
-  if (totalServings === 0) {
+  if (totalServings === 0 && !hasDishLines) {
     msg = noOrdersMsg;
     noOrders = true;
     console.log('Zalo sheet summary: Tổng 0 suất — sending no-order message');
