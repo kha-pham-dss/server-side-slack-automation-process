@@ -8,21 +8,21 @@ export const GMT7_OFFSET_MS = 7 * 60 * 60 * 1000;
 /** TTL cache config / token SSM (ms). */
 export const CACHE_TTL_MS = 60_000;
 
-/** Mon–Fri 9:30 GMT+7 — EventBridge: cron(30 2 ? * MON-FRI *) */
-export const POST_MENU_HOUR_GMT7 = 9;
-export const POST_MENU_MINUTE_GMT7 = 30;
+/** Mon–Fri 10:00 GMT+7 — EventBridge: cron(0 3 ? * MON-FRI *) */
+export const POST_MENU_HOUR_GMT7 = 10;
+export const POST_MENU_MINUTE_GMT7 = 0;
 
-/** Mon–Fri 10:20 GMT+7 — EventBridge: cron(20 3 ? * MON-FRI *) */
-export const COLLECT_ORDERS_HOUR_GMT7 = 10;
-export const COLLECT_ORDERS_MINUTE_GMT7 = 20;
+/** Mon–Fri 11:00 GMT+7 — EventBridge: cron(0 4 ? * MON-FRI *) */
+export const ZALO_SUMMARY_HOUR_GMT7 = 11;
+export const ZALO_SUMMARY_MINUTE_GMT7 = 0;
 
-/** Mon–Fri 10:45 GMT+7 — EventBridge: cron(45 3 ? * MON-FRI *) */
-export const ZALO_SUMMARY_HOUR_GMT7 = 10;
-export const ZALO_SUMMARY_MINUTE_GMT7 = 45;
-
-/** Ngưỡng "sau Zalo summary" (slack-events ping reconcile). */
+/** Ngưỡng "sau Zalo summary" (slack-events → collect-orders reconcile). */
 export const ZALO_SUMMARY_CUTOFF_HOUR_GMT7 = ZALO_SUMMARY_HOUR_GMT7;
 export const ZALO_SUMMARY_CUTOFF_MINUTE_GMT7 = ZALO_SUMMARY_MINUTE_GMT7;
+
+/** @deprecated Không còn schedule; giữ để tham chiếu nếu cần invoke thủ công. */
+export const COLLECT_ORDERS_HOUR_GMT7 = 10;
+export const COLLECT_ORDERS_MINUTE_GMT7 = 55;
 
 /** Slack request signature: timestamp lệch tối đa (giây). */
 export const SLACK_SIGNATURE_MAX_AGE_SEC = 5 * 60;

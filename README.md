@@ -1,74 +1,158 @@
 # server-side-slack-automation-process
 
-Server-side Slack dishes ordering: post today’s menu at **9:30 GMT+7**, collect reactions at **10:20 GMT+7**, then send a **Zalo** group summary from the sheet at **10:45 GMT+7** (Mon–Fri). Before each Zalo send, **zalo-sheet-summary** compares Slack `reactions.get` counts to the sheet summary text; on mismatch it **replies in the menu thread** (with an `@mention`) and logs a warning. Optional: Slack Events API URL so that a **reply under the day’s menu** re-runs CollectOrders and gets a ✅ reaction. Dishes and orders use Google Sheets.
+Server-side Slack dishes ordering (vendor mới): đăng thực đơn lúc **10:00 GMT+7**, user react chọn món (tối đa **5 món/người**), lúc **11:00 GMT+7** tổng hợp đơn từ Slack reactions → ghi Google Sheet + ô **S62** → gửi Zalo nhóm. Tùy chọn: Slack Events API để **reply dưới menu + @Mr.Chef** cập nhật lại đơn (sau 11h: cập nhật sheet, ping reconcile, không gửi lại Zalo). Tất cả ngày/giờ dùng **GMT+7**.
 
 ## Workflow
 
-Timeline (Mon–Fri only):
+Timeline (T2–T6):
 
 ```
-  9:30 GMT+7
+  10:00 GMT+7
   ─────────────
   EventBridge ──────► PostMenu Lambda
                             │
                             ├──► SSM (config)
-                            ├──► Slack DM       (latest message from menu user → parse dishes)
-                            ├──► Google Sheets  (write dish list)
-                            ├──► Slack channel  (post menu → get message_ts)
-                            └──► DynamoDB       (store date, message_ts)
+                            ├──► Slack DM       (tin nhắn mới nhất từ menu-dm-user-id → parse món)
+                            ├──► Slack channel  (post menu + add reaction :one:…:twenty:, :up:)
+                            └──► DynamoDB
+                                  • slack-dishes-menu-message (channel_id, message_ts)
+                                  • slack-dishes-dishes-menu   (danh sách món theo ngày)
 
   ─ ─ ─ ─ ─ ─ ─ ─ ─
-  Users react in Slack with :one:, :two:, :three:, … to choose a dish.
+  User react :one: … :twenty: chọn món (tối đa 5 món/user).
+  :up: = upsize lên 35k (mặc định 30k).
   ─ ─ ─ ─ ─ ─ ─ ─ ─
 
-  10:20 GMT+7 (schedule)
-  ─────────────
-  EventBridge ──────► CollectOrders Lambda
-                            │
-                            ├──► DynamoDB, Slack (reactions.get, users.list), Google Sheets
-                            ├──► If user reacted 2+ dishes: ping in thread "Bạn đang đặt 2 món, nhà bếp chỉ ghi nhận món N"
-                            └──► Reply under menu: "Đã ghi nhận danh sách đặt món :bee-like:"
-
-  10:45 GMT+7 (schedule)
+  11:00 GMT+7 (schedule)
   ─────────────
   EventBridge ──────► ZaloSheetSummary Lambda
                             │
-                            ├──► SSM + Google Sheets (default range M58:M72 → text + "Tổng N suất", "x 40k" lines)
-                            ├──► DynamoDB (today’s menu channel + message_ts) + Slack reactions.get
-                            │         Compare: dish emoji counts (no :up:, no bot) vs Tổng suất; :up: vs sum of `N 40k` (any N ≥ 1)
-                            ├──► On mismatch: thread reply under that menu post (<@notify user>) + console.warn
-                            └──► Zalo group (one message; summary text unchanged)
+                            ├──► DynamoDB dishes-menu (tên món) + Slack reactions.get
+                            ├──► Build tin tổng hợp in-memory → gửi Zalo (không đọc sheet)
+                            └──► Google Sheets (ghi giá/user + copy tin vào S62 — chỉ ghi)
 
-  Any time (Slack Events API)
+  Bất kỳ lúc nào (Slack Events API)
   ─────────────
-  User replies under today's menu ──► Slack ──► SlackEvents Lambda URL
+  Reply dưới menu hôm nay + @Mr.Chef ──► SlackEvents Lambda URL
                                                 │
-                                                └──► Invoke CollectOrders (triggeredBy: slack_reply)
-                                                     → write sheet, react :white_check_mark: on that reply
+                                                └──► Invoke CollectOrders (slack_reply)
+                                                     → ghi lại sheet + S62
+                                                     → :white_check_mark: trên reply
+                                                     → Trước 11h: reply "Đã ghi nhận danh sách đặt món :bee-like:"
+                                                     → Sau 11h: ping @RECONCILE_NOTIFY_SLACK_USER_ID
+                                                        kèm đơn user (vd. "suất 35k 1+2+3+4, cho E")
+                                                        — không gửi lại Zalo
 ```
 
-**In short:** Menu at 9:30 → users react → at 10:20 orders are collected; users with 2+ reactions get one dish (first) and a ping; schedule run posts a confirmation reply. At 10:45 the sheet snippet is sent to Zalo after a Slack-vs-sheet sanity check; mismatches get a thread reply on the menu message. A reply under the menu can re-run CollectOrders and get a ✅ on the reply.
+**Tóm tắt:** 10h đăng menu → user react (≤5 món, :up: = 35k) → 11h Zalo lambda tổng hợp từ reactions, ghi sheet + S62, gửi Zalo (nếu bật). Reply @Mr.Chef dưới menu luôn chạy lại CollectOrders; sau 11h chỉ cập nhật sheet và ping reconcile thủ công.
+
+## PostMenu — tin Slack
+
+Cấu trúc message (Block Kit):
+
+1. **Thực đơn hôm nay:**
+2. Giá: `4 món + 1 rau => 30k`, `5 món + 1 rau => 35k`, ghi chú mặc định 30k / nhà bếp tự thêm món nếu react ít hơn 4
+3. Danh sách món chia **2–3 cột** (~3–4 món/cột), mỗi dòng `:emoji: (Tên món)`
+4. `:up: để upsize lên 35k`
+
+Nguồn món: DM Slack của user trong SSM `menu-dm-user-id`. Sau khi post, danh sách món lưu vào DynamoDB **`slack-dishes-dishes-menu`** (partition key `date` GMT+7, attribute `dishes`). DM `Bỏ qua hôm nay` → không post Slack, không ghi DynamoDB.
+
+## Đặt món & giá
+
+| Hằng số | Giá trị | File |
+|---------|---------|------|
+| Giá mặc định | 30.000đ | `serverless/shared/meal-constants.js` |
+| Giá upsize (`:up:`) | 35.000đ | cùng file |
+| Tối đa món trên menu | 20 | cùng file |
+| Tối đa món/user | 5 | cùng file |
+
+Ghi đè giá qua SSM: `orders-default-price`, `orders-upsize-price`.
+
+**Sheet mỗi user (như cũ):** cột ngày có cặp (món, giá). Cột món = chuỗi index `1+2+3`; cột giá = `30000` hoặc `35000`.
+
+## Zalo summary — tin gửi đi
+
+Lambda **build tin tổng hợp in-memory** từ Slack `reactions.get` + **tên món từ DynamoDB** (`slack-dishes-dishes-menu`), rồi:
+
+1. **Gửi Zalo** — biến `zaloMessage` trên Lambda (không đọc sheet)
+2. **Ghi sheet** — copy cùng nội dung vào S62 + giá từng user (chỉ ghi)
+
+Sheet chỉ dùng để **khớp tên user** đặt món và ghi giá — không còn `dishes-range`.
+
+```
+suất 30k 1+2+3 (Phở+Bún+Cơm), cho A
+suất 30k 2+3+4 (Bún+Cơm+Canh), cho B
+suất 35k 1+2+3+4 (Phở+Bún+Cơm+Canh), cho E
+Tổng 3 suất 30k, 1 suất 35k nhé ạ
+```
+
+Ô ghi tin: **`S62`** (mặc định). Ghi đè bằng env `ZALO_SUMMARY_CELL` hoặc SSM `zalo-summary-cell`.
+
+**Gửi Zalo:** trong `serverless/zalo-sheet-summary/job.js`, `ZALO_SEND_DISABLED = true` → chỉ log + ghi sheet (ngày đầu gửi tay). Đổi `false` và deploy khi muốn auto gửi.
+
+## Slack emoji món
+
+Reaction theo index món (0-based trong code, hiển thị 1-based cho user):
+
+- Món 1–10: `:one:` … `:nine:`, `:keycap_ten:`
+- Món 11–20: `:eleven:` … `:twenty:` — cần **custom emoji** trong workspace nếu Slack không có sẵn
+
+## Lịch & múi giờ
+
+| Sự kiện | GMT+7 | Cron UTC (EventBridge) |
+|---------|-------|-------------------------|
+| PostMenu | 10:00 T2–T6 | `cron(0 3 ? * MON-FRI *)` |
+| ZaloSheetSummary | 11:00 T2–T6 | `cron(0 4 ? * MON-FRI *)` |
+| CollectOrders | Không schedule | Chỉ invoke từ Slack Events |
+
+Hằng số trong `serverless/shared/time-constants.js`. Khóa ngày DynamoDB = **YYYY-MM-DD theo GMT+7**.
 
 ## Folders
 
-- **`iac/`** – AWS SAM: DynamoDB, EventBridge schedules, Lambdas (post-menu, collect-orders, **zalo-sheet-summary**, **slack-events**), Lambda Function URL for Slack Events. See `iac/README.md` and `iac/config/parameter-store-keys.md`.
-- **`serverless/`** – Lambda source: **post-menu**, **collect-orders**, **zalo-sheet-summary**, **slack-events** (Node.js 20).
+- **`iac/`** – AWS SAM: DynamoDB, EventBridge, Lambdas, Function URL. Xem `iac/README.md`, `iac/config/parameter-store-keys.md`.
+- **`serverless/`** – Lambda source: **post-menu**, **collect-orders**, **zalo-sheet-summary**, **slack-events**, **sync-slack-ids**.
+- **`serverless/shared/`** – logic dùng chung (`@slack-dishes/shared`):
+  - `time-constants.js` — lịch, GMT+7, cutoff 11h
+  - `meal-constants.js` — giá, max món, emoji, S62 default
+  - `dynamo-dishes.js` — đọc/ghi bảng dishes menu
+  - `orders.js` — parse reactions, format Zalo, ghi sheet + S62
 
 ## Deploy
 
-From repo root: `make deploy` (or `cd iac && sam build && sam deploy --guided`). Create SSM parameters under `/slack-dishes/` before first run (see `iac/config/parameter-store-keys.md`). For Slack Events (reply-under-menu → re-run CollectOrders), add `/slack-dishes/signing-secret` and in the Slack app set **Event Subscriptions** Request URL to the deployed **SlackEventsFunctionUrl** (output after deploy). Subscribe to **message.channels** (and **message.groups** if private channel). Sau 10:45 GMT+7, reply dưới menu có @Mr.Chef → CollectOrders + ping `@RECONCILE_NOTIFY_SLACK_USER_ID`.
+```bash
+make deploy
+# hoặc: cd iac && sam build && sam deploy --guided
+```
 
-For **Zalo** daily summary: set Zalo-related SSM keys (`zalo-group-id`, `zalo-cookies-json`, `zalo-imei`, `zalo-user-agent`, plus sheet keys used for the summary range). The Zalo Lambda uses the same **`bot-token`** and **`TABLE_NAME`** (SAM-provided) as the menu flow so it can call `reactions.get` and post a **thread reply** on mismatch. Optional env **`RECONCILE_NOTIFY_SLACK_USER_ID`** overrides the default Slack user id mentioned in that reply. Local dry run: `scripts/zalo/send-sheet-summary-local.mjs` (see comment in script for optional `TABLE_NAME` to enable the Slack reconcile step).
+Trước lần chạy đầu: tạo SSM parameters dưới `/slack-dishes/` (xem `iac/config/parameter-store-keys.md`).
+
+**Slack Events** (reply dưới menu → CollectOrders):
+
+1. Thêm `/slack-dishes/signing-secret`
+2. Slack app → Event Subscriptions → Request URL = **SlackEventsFunctionUrl** (output sau deploy)
+3. Subscribe **message.channels** (+ **message.groups** nếu kênh private)
+
+**Env Lambda (SAM `template.yaml`):**
+
+| Biến | Mặc định | Mô tả |
+|------|----------|--------|
+| `TABLE_NAME` | `slack-dishes-menu-message` | Metadata tin menu Slack (channel, ts) |
+| `DISHES_TABLE_NAME` | `slack-dishes-dishes-menu` | Danh sách món theo ngày |
+| `ZALO_SUMMARY_CELL` | `S62` | Ô sheet ghi tin Zalo tổng hợp |
+| `RECONCILE_NOTIFY_SLACK_USER_ID` | `U02SJRNAM2M` | User được ping sau 11h khi có cập nhật đơn |
+| `MR_CHEF_SLACK_USER_ID` | (SSM) | User phải được @ trong reply để trigger CollectOrders |
+
+**Zalo:** SSM `zalo-group-id`, `zalo-cookies-json`, `zalo-imei`, `zalo-user-agent` + sheet keys (orders). Cần `bot-token`, `TABLE_NAME`, `DISHES_TABLE_NAME`.
+
+**Test local Zalo/summary:** `node --env-file=.env scripts/zalo/send-sheet-summary-local.mjs` (cần `TABLE_NAME`, `DISHES_TABLE_NAME`, tùy chọn `ZALO_SUMMARY_CELL`).
 
 ## AWS Free Tier
 
-This setup is designed to stay within **AWS Free Tier** where possible:
+| Resource | Free tier (12 tháng) | App này |
+|----------|----------------------|---------|
+| **Lambda** | 1M requests/tháng | ~2 schedule/ngày × ~22 ngày + slack-events khi reply |
+| **DynamoDB** | 25 GB storage (always free); on-demand requests ~$0 ở quy mô này | Hai bảng, vài item/ngày |
+| **EventBridge** | 14M events/tháng | 2 rules × ~22 ngày ≈ 44 lần/tháng |
+| **SSM** | Standard parameters | Config `/slack-dishes/` |
 
-| Resource | Free tier (12 months) | This app |
-|----------|------------------------|----------|
-| **Lambda** | 1M requests/month, 400,000 GB‑seconds | Schedules: ~3/day × weekdays; + slack-events on each reply under menu |
-| **DynamoDB** | 25 GB storage, 1M read + 1M write (on‑demand) | Single table, few items per day (+ one read per Zalo run for menu metadata) |
-| **EventBridge** | 14M events/month | 3 rules × ~22 weekdays ≈ 66 scheduled invocations/month |
-| **SSM Parameter Store** | Standard parameters (10k), no charge | Config and secrets under `/slack-dishes/` |
-
-One Lambda Function URL (slack-events) is public so Slack can POST; no always-on servers. After 12 months, same usage remains low cost (pay-per-request DynamoDB, Lambda per request).
+Một Lambda Function URL (slack-events) public để Slack POST. Không server luôn bật.

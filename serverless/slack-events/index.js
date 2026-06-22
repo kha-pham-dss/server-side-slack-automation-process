@@ -2,7 +2,7 @@
  * Slack Events API endpoint (Lambda Function URL).
  * - url_verification: return challenge.
  * - Reply trong thread menu + @Mr.Chef → CollectOrders (sheet + :white_check_mark: trên reply).
- * - Cùng luồng đó nhưng sau 10:45 GMT+7 → thread reply chỉ @RECONCILE_NOTIFY_SLACK_USER_ID (nhắc gửi lại Zalo).
+ * - Cùng luồng đó nhưng sau 11:00 GMT+7 → collect-orders cập nhật sheet + ping RECONCILE_NOTIFY_SLACK_USER_ID kèm món user đặt.
  */
 
 import crypto from 'crypto';
@@ -24,12 +24,9 @@ const ssm = new SSMClient();
 const TABLE_NAME = process.env.TABLE_NAME;
 const COLLECT_ORDERS_FUNCTION_NAME = process.env.COLLECT_ORDERS_FUNCTION_NAME;
 const PARAMETER_PREFIX = process.env.PARAMETER_PREFIX || '/slack-dishes';
-const RECONCILE_NOTIFY_SLACK_USER_ID = 'U02SJRNAM2M';
 
 /** @type {{ value: string | null | undefined; at: number }} */
 let mrChefUserIdCache = { value: undefined, at: 0 };
-/** @type {{ value: string | null | undefined; at: number }} */
-let botTokenCache = { value: undefined, at: 0 };
 
 function messageMentionsSlackUser(text, slackUserId) {
   if (!text || !slackUserId) return false;
@@ -59,34 +56,6 @@ async function getMrChefSlackUserId() {
   } catch (e) {
     if (e?.name === 'ParameterNotFound') {
       mrChefUserIdCache = { value: null, at: Date.now() };
-      return null;
-    }
-    throw e;
-  }
-}
-
-async function getBotToken() {
-  const fromEnv = (process.env.BOT_TOKEN || '').trim();
-  if (fromEnv) return fromEnv;
-
-  if (Date.now() - botTokenCache.at < CACHE_TTL_MS && botTokenCache.value !== undefined) {
-    return botTokenCache.value;
-  }
-
-  try {
-    const res = await ssm.send(
-      new GetParameterCommand({
-        Name: `${PARAMETER_PREFIX}/bot-token`,
-        WithDecryption: true,
-      })
-    );
-    const v = (res.Parameter?.Value ?? '').trim();
-    const token = v || null;
-    botTokenCache = { value: token, at: Date.now() };
-    return token;
-  } catch (e) {
-    if (e?.name === 'ParameterNotFound') {
-      botTokenCache = { value: null, at: Date.now() };
       return null;
     }
     throw e;
@@ -145,31 +114,16 @@ async function getTodayMenuMessage() {
   return unmarshall(res.Item);
 }
 
-async function postSlackThreadReply(botToken, channelId, threadTs, text) {
-  const res = await fetch('https://slack.com/api/chat.postMessage', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json; charset=utf-8',
-      Authorization: `Bearer ${botToken}`,
-    },
-    body: JSON.stringify({
-      channel: channelId,
-      thread_ts: threadTs,
-      text,
-    }),
-  });
-  const data = await res.json();
-  if (!data.ok) throw new Error(`Slack chat.postMessage: ${data.error ?? res.status}`);
-}
-
 /**
  * Invoke CollectOrders with payload so it adds reaction to the reply and does not post schedule message.
  */
-async function invokeCollectOrders(replyChannelId, replyTs) {
+async function invokeCollectOrders(replyChannelId, replyTs, userId, afterZaloCutoff) {
   const payload = JSON.stringify({
     triggeredBy: 'slack_reply',
     replyChannelId,
     replyTs,
+    userId,
+    afterZaloCutoff,
   });
   await lambda.send(
     new InvokeCommand({
@@ -234,23 +188,8 @@ export async function handler(event) {
     return { statusCode: 200, body: '' };
   }
 
-  await invokeCollectOrders(channel, replyTs);
-
-  if (isAfterZaloSummaryCutoffNow()) {
-    const botToken = await getBotToken();
-    if (botToken) {
-      const reconcileUid = (
-        process.env.RECONCILE_NOTIFY_SLACK_USER_ID || RECONCILE_NOTIFY_SLACK_USER_ID
-      ).trim();
-      const ping = reconcileUid ? `<@${reconcileUid}> ` : '';
-      const text = `${ping}Có cập nhật đặt món sau khi đã gửi Zalo.`;
-      postSlackThreadReply(botToken, menu.channel_id, menu.message_ts, text)
-        .then(() => console.log('menu @mention after 10:45: posted reconcile ping', { user: ev.user }))
-        .catch((e) => console.warn('menu @mention after 10:45: ping failed', e?.message || e));
-    } else {
-      console.warn('menu @mention after 10:45: no bot-token for reconcile ping');
-    }
-  }
+  const afterZaloCutoff = isAfterZaloSummaryCutoffNow();
+  await invokeCollectOrders(channel, replyTs, ev.user, afterZaloCutoff);
 
   return { statusCode: 200, body: '' };
 }
