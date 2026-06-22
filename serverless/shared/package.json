@@ -9,6 +9,9 @@
     "./sheet-slack.js": "./sheet-slack.js",
     "./meal-constants.js": "./meal-constants.js",
     "./orders.js": "./orders.js",
-    "./dynamo-dishes.js": "./dynamo-dishes.js"
+    "./dynamo-dishes.js": "./dynamo-dishes.js",
+    "./ssm-config.js": "./ssm-config.js",
+    "./post-command.js": "./post-command.js",
+    "./control-channel-post-job.js": "./control-channel-post-job.js"
   }
 }

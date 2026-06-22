@@ -218,7 +218,6 @@ Resources:
         Variables:
           TABLE_NAME: !Ref MenuMessageTable
           COLLECT_ORDERS_FUNCTION_NAME: !Ref CollectOrdersFunction
-          CONTROL_CHANNEL_POST_FUNCTION_NAME: !Ref ControlChannelPostFunction
           PARAMETER_PREFIX: /slack-dishes
           # Slack user id (e.g. U01ABC…) for Mr.Chef; menu-thread replies must @-mention this user to trigger CollectOrders. Override SSM /slack-dishes/mr-chef-user-id when non-empty.
           MR_CHEF_SLACK_USER_ID: ''
@@ -230,7 +229,11 @@ Resources:
             - Effect: Allow
               Action:
                 - ssm:GetParameter
-              Resource: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/slack-dishes/*'
+                - ssm:GetParameters
+                - ssm:GetParametersByPath
+              Resource:
+                - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/slack-dishes'
+                - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/slack-dishes/*'
             - Effect: Allow
               Action:
                 - dynamodb:GetItem
@@ -238,9 +241,7 @@ Resources:
             - Effect: Allow
               Action:
                 - lambda:InvokeFunction
-              Resource:
-                - !GetAtt CollectOrdersFunction.Arn
-                - !GetAtt ControlChannelPostFunction.Arn
+              Resource: !GetAtt CollectOrdersFunction.Arn
       FunctionUrlConfig:
         AuthType: NONE
         Cors:

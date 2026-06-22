@@ -1,7 +1,7 @@
 /**
  * Slack Events API endpoint (Lambda Function URL).
  * - url_verification: return challenge.
- * - Control channel: `POST: …` → invoke control-channel-post (gửi vào channel-id).
+ * - Control channel: `POST: …` → gửi vào channel-id (chạy inline).
  * - Reply trong thread menu + @Mr.Chef → CollectOrders (sheet + :white_check_mark: trên reply).
  * - Cùng luồng đó nhưng sau 11:00 GMT+7 → collect-orders cập nhật sheet + ping RECONCILE_NOTIFY_SLACK_USER_ID kèm món user đặt.
  */
@@ -17,6 +17,8 @@ import {
   dateKeyGmt7,
   isAfterZaloSummaryCutoffNow,
 } from '@slack-dishes/shared/time-constants.js';
+import { isPostCommand, slackEventMessageText } from '@slack-dishes/shared/post-command.js';
+import { runControlChannelPost } from '@slack-dishes/shared/control-channel-post-job.js';
 
 const dynamo = new DynamoDBClient();
 const lambda = new LambdaClient();
@@ -24,8 +26,26 @@ const ssm = new SSMClient();
 
 const TABLE_NAME = process.env.TABLE_NAME;
 const COLLECT_ORDERS_FUNCTION_NAME = process.env.COLLECT_ORDERS_FUNCTION_NAME;
-const CONTROL_CHANNEL_POST_FUNCTION_NAME = process.env.CONTROL_CHANNEL_POST_FUNCTION_NAME;
 const PARAMETER_PREFIX = process.env.PARAMETER_PREFIX || '/slack-dishes';
+
+/** message subtypes bỏ qua (không phải tin user gõ POST:). */
+const IGNORED_MESSAGE_SUBTYPES = new Set([
+  'message_changed',
+  'message_deleted',
+  'channel_join',
+  'channel_leave',
+  'channel_topic',
+  'channel_purpose',
+  'channel_name',
+  'channel_archive',
+  'channel_unarchive',
+  'group_join',
+  'group_leave',
+  'group_topic',
+  'group_name',
+  'group_archive',
+  'group_unarchive',
+]);
 
 /** @type {{ value: string | null | undefined; at: number }} */
 let mrChefUserIdCache = { value: undefined, at: 0 };
@@ -34,12 +54,15 @@ let controlChannelIdCache = { value: undefined, at: 0 };
 
 function messageMentionsSlackUser(text, slackUserId) {
   if (!text || !slackUserId) return false;
-  // Slack: <@U123> or <@U123|display name>
   return text.includes(`<@${slackUserId}`);
 }
 
-function isPostCommand(text) {
-  return /^POST:\s+/i.test((text || '').trim());
+function postCommandSkipReason({ controlChannelId, channel, inThread, postCmd }) {
+  if (!postCmd) return null;
+  if (!controlChannelId) return 'no_control_channel_id_ssm';
+  if (channel !== controlChannelId) return 'channel_mismatch';
+  if (inThread) return 'in_thread';
+  return null;
 }
 
 async function getControlChannelId() {
@@ -98,7 +121,6 @@ function dateKey() {
   return dateKeyGmt7();
 }
 
-/** So khớp ts menu (DynamoDB) với reaction item.ts dù Slack khác độ chính xác chuỗi. */
 function normalizeSlackTs(ts) {
   if (ts == null || ts === '') return '';
   const n = parseFloat(String(ts));
@@ -146,9 +168,6 @@ async function getTodayMenuMessage() {
   return unmarshall(res.Item);
 }
 
-/**
- * Invoke CollectOrders with payload so it adds reaction to the reply and does not post schedule message.
- */
 async function invokeCollectOrders(replyChannelId, replyTs, userId, afterZaloCutoff) {
   const payload = JSON.stringify({
     triggeredBy: 'slack_reply',
@@ -162,16 +181,6 @@ async function invokeCollectOrders(replyChannelId, replyTs, userId, afterZaloCut
       FunctionName: COLLECT_ORDERS_FUNCTION_NAME,
       InvocationType: 'Event',
       Payload: payload,
-    })
-  );
-}
-
-async function invokeControlChannelPost(payload) {
-  await lambda.send(
-    new InvokeCommand({
-      FunctionName: CONTROL_CHANNEL_POST_FUNCTION_NAME,
-      InvocationType: 'Event',
-      Payload: JSON.stringify(payload),
     })
   );
 }
@@ -212,28 +221,59 @@ export async function handler(event) {
   }
 
   const ev = body.event;
-  if (ev?.type !== 'message' || ev.bot_id || ev.subtype) {
+  if (ev?.type !== 'message' || ev.bot_id) {
+    return { statusCode: 200, body: '' };
+  }
+
+  if (ev.subtype && IGNORED_MESSAGE_SUBTYPES.has(ev.subtype)) {
     return { statusCode: 200, body: '' };
   }
 
   const threadTs = ev.thread_ts || ev.ts;
   const channel = ev.channel;
   const replyTs = ev.ts;
-
+  const messageText = slackEventMessageText(ev);
   const controlChannelId = await getControlChannelId();
-  if (
-    controlChannelId &&
-    channel === controlChannelId &&
-    !ev.thread_ts &&
-    isPostCommand(ev.text) &&
-    CONTROL_CHANNEL_POST_FUNCTION_NAME
-  ) {
-    await invokeControlChannelPost({
-      userId: ev.user,
-      controlChannelId: channel,
-      ackMessageTs: ev.ts,
-      text: ev.text,
+  const postCmd = isPostCommand(messageText);
+  const inThread = !!ev.thread_ts;
+
+  if (controlChannelId && channel === controlChannelId) {
+    console.log('slack-events: control channel message', {
+      subtype: ev.subtype || null,
+      inThread,
+      postCmd,
+      textPreview: String(messageText || '').slice(0, 60),
     });
+  }
+
+  if (postCmd) {
+    console.log('slack-events: POST command seen', {
+      channel,
+      controlChannelId,
+      channelMatch: channel === controlChannelId,
+      inThread,
+      skip: postCommandSkipReason({ controlChannelId, channel, inThread, postCmd }),
+      textPreview: String(messageText || '').slice(0, 60),
+    });
+  } else if (ev.subtype) {
+    console.log('slack-events: message ignored subtype', {
+      subtype: ev.subtype,
+      channel,
+      textPreview: String(messageText || '').slice(0, 40),
+    });
+  }
+
+  if (controlChannelId && channel === controlChannelId && !inThread && postCmd) {
+    try {
+      await runControlChannelPost({
+        userId: ev.user,
+        controlChannelId: channel,
+        ackMessageTs: ev.ts,
+        text: messageText,
+      });
+    } catch (err) {
+      console.error('slack-events: control-channel-post failed', err?.message || err);
+    }
     return { statusCode: 200, body: '' };
   }
 
