@@ -108,6 +108,7 @@ export async function runFromConfig(config) {
     userIdToName: agg.userIdToName,
     summaryText: zaloMessage,
     zaloCell: agg.zaloCell,
+    dishes: agg.dishes,
   });
 
   if (ZALO_SEND_DISABLED) {

@@ -1,7 +1,7 @@
 # Serverless – Slack dishes ordering
 Lambda functions for the Slack dishes flow:
 
-- **post-menu** – Runs at 9:30 GMT+7 (Mon–Fri). Reads latest message from DM with menu source user (first line skipped, rest = dishes), updates the sheet with that list, posts menu to Slack channel, stores `message_ts` in DynamoDB.
+- **post-menu** – Runs at 9:30 GMT+7 (Mon–Fri). Reads latest message from DM with menu source user (mỗi dòng = một món), ảnh từ **thread reply** dưới tin DM đó (nhúng vào blocks tin menu channel), posts menu to Slack channel, stores `message_ts` in DynamoDB.
 - **collect-orders** – Runs at 10:20 GMT+7 (schedule) or when invoked by slack-events. Reads today’s menu from DynamoDB, calls Slack `reactions.get`, writes orders to the sheet. Row match: cột Slack ID (`orders-slack-id-column`, mặc định **BZ**, cùng hàng `orders-user-range`), else name vs Slack profile aliases. Logs users with reactions but no matching sheet row. If a user reacted to 2+ dishes, pings them in the menu thread (only first dish is recorded). If run from schedule, replies under the menu with "Đã ghi nhận danh sách đặt món :bee-like:"; if run from a user reply (Slack Events), adds :white_check_mark: to that reply.
 - **sync-slack-ids** – **Invoke thủ công** (không schedule). Đọc tên từ `orders-user-range`, khớp `users.list`, ghi Slack `U…` vào cột ID (mặc định `BZ15:BZ100`). Chạy sau khi thêm user mới hoặc trước khi bật khớp theo ID. Shared helpers: `serverless/shared` (`@slack-dishes/shared`).
 - **slack-events** – HTTP endpoint (Lambda Function URL). **Control channel:** tin `POST: …` → gửi thẳng vào `channel-id` (inline, log `control-channel-post: sent`). Reply dưới menu + @Mr.Chef → collect-orders.

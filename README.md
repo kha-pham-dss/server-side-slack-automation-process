@@ -40,7 +40,7 @@ Timeline (T2–T6):
                                                      → :white_check_mark: trên reply
                                                      → Trước 11h: reply "Đã ghi nhận danh sách đặt món :bee-like:"
                                                      → Sau 11h: ping @RECONCILE_NOTIFY_SLACK_USER_ID
-                                                        kèm đơn user (vd. "suất 35k 1+2+3+4, cho E")
+                                                        kèm đơn user (vd. "suất 35k Phở+Bún+Cơm+Canh, cho E")
                                                         — không gửi lại Zalo
 ```
 
@@ -52,10 +52,10 @@ Cấu trúc message (Block Kit):
 
 1. **Thực đơn hôm nay:**
 2. Giá: `4 món + 1 rau => 30k`, `5 món + 1 rau => 35k`, ghi chú mặc định 30k / nhà bếp tự thêm món nếu react ít hơn 4
-3. Danh sách món chia **2–3 cột** (~3–4 món/cột), mỗi dòng `:emoji: (Tên món)`
+3. Danh sách món chia **các cột** (tối đa 5 món/cột: 1–5 | 6–10 | 11–15 | …), mỗi dòng `:emoji: (Tên món)`
 4. `:up: để upsize lên 35k`
 
-Nguồn món: DM Slack của user trong SSM `menu-dm-user-id`. Sau khi post, danh sách món lưu vào DynamoDB **`slack-dishes-dishes-menu`** (partition key `date` GMT+7, attribute `dishes`). DM `Bỏ qua hôm nay` → không post Slack, không ghi DynamoDB.
+Nguồn món: DM Slack của user trong SSM `menu-dm-user-id` (tin mới nhất — mỗi dòng = một món; ảnh = reply trong thread dưới tin đó, nhúng vào tin menu channel). Sau khi post, danh sách món lưu vào DynamoDB **`slack-dishes-dishes-menu`** (partition key `date` GMT+7, attribute `dishes`). DM `Bỏ qua hôm nay` → không post Slack, không ghi DynamoDB.
 
 ## Đặt món & giá
 
@@ -68,7 +68,7 @@ Nguồn món: DM Slack của user trong SSM `menu-dm-user-id`. Sau khi post, dan
 
 Ghi đè giá qua SSM: `orders-default-price`, `orders-upsize-price`.
 
-**Sheet mỗi user (như cũ):** cột ngày có cặp (món, giá). Cột món = chuỗi index `1+2+3`; cột giá = `30000` hoặc `35000`.
+**Sheet mỗi user (như cũ):** cột ngày có cặp (món, giá). Cột món = tên món `Phở+Bún+Cơm`; cột giá = `30000` hoặc `35000`.
 
 ## Zalo summary — tin gửi đi
 
@@ -80,9 +80,9 @@ Lambda **build tin tổng hợp in-memory** từ Slack `reactions.get` + **tên 
 Sheet chỉ dùng để **khớp tên user** đặt món và ghi giá — không còn `dishes-range`.
 
 ```
-suất 30k 1+2+3 (Phở+Bún+Cơm), cho A
-suất 30k 2+3+4 (Bún+Cơm+Canh), cho B
-suất 35k 1+2+3+4 (Phở+Bún+Cơm+Canh), cho E
+suất 30k Phở+Bún+Cơm, cho A
+suất 30k Bún+Cơm+Canh, cho B
+suất 35k Phở+Bún+Cơm+Canh, cho E
 Tổng 3 suất 30k, 1 suất 35k nhé ạ
 ```
 

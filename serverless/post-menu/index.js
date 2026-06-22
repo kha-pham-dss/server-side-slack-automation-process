@@ -1,7 +1,8 @@
 /**
  * PostMenu Lambda (10:00 GMT+7 Mon–Fri).
- * Fetches dishes from latest message in DM with menu source user (skip first line; rest = dish names),
- * posts menu to Slack channel, stores message_ts + dish list in DynamoDB.
+ * Fetches dishes from latest message in DM with menu source user (every non-empty line = dish name),
+ * images from thread replies under that DM message, posts menu (with embedded images) to Slack channel,
+ * stores message_ts + dish list in DynamoDB.
  * On DM "Bỏ qua hôm nay": no Slack post, no DynamoDB rows.
  */
 
@@ -63,9 +64,38 @@ const MENU_DM_USER_ID_DEFAULT = 'U02SJRNAM2M';
 const SKIP_TODAY_DM_TEXT = 'Bỏ qua hôm nay';
 
 /**
- * Get latest message from DM with the given user and parse dishes.
- * Message format: first line = title (e.g. "Thực đơn ngày mai 12/1"), skip; next lines = dish names.
- * Returns [ { id: "0", name: "Dish A" }, ... ] (id = 0-based index), or null if DM is {@link SKIP_TODAY_DM_TEXT}.
+ * Image file IDs from thread replies under the menu DM message (not the parent message itself).
+ * @param {string} botToken
+ * @param {string} dmChannelId
+ * @param {string} parentTs
+ * @returns {Promise<string[]>}
+ */
+async function fetchImageFileIdsFromDmThread(botToken, dmChannelId, parentTs) {
+  const res = await fetch(
+    `https://slack.com/api/conversations.replies?channel=${encodeURIComponent(dmChannelId)}&ts=${encodeURIComponent(parentTs)}&limit=100`,
+    { headers: { Authorization: `Bearer ${botToken}` } }
+  );
+  const data = await res.json();
+  if (!data.ok) {
+    console.warn('PostMenu: conversations.replies failed', data.error);
+    return [];
+  }
+
+  const fileIds = [];
+  for (const msg of (data.messages || []).slice(1)) {
+    for (const f of msg.files || []) {
+      if (f.mimetype?.startsWith('image/') && f.id) fileIds.push(f.id);
+    }
+  }
+  return fileIds;
+}
+
+/**
+ * Get latest message from DM with the given user and parse dishes + thread images.
+ * Message format: each non-empty line = one dish name (including the first line).
+ * Images: reply in thread under that DM message (image files only).
+ * @returns {{ dishes: { id: string, name: string }[], imageFileIds: string[] } | null}
+ *   null if DM is {@link SKIP_TODAY_DM_TEXT}.
  */
 async function fetchDishesFromSlackDM(botToken, userId) {
   const openRes = await fetch('https://slack.com/api/conversations.open', {
@@ -98,11 +128,14 @@ async function fetchDishesFromSlackDM(botToken, userId) {
   }
 
   const lines = latest.text.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
-  const dishNames = lines.slice(1);
-  return dishNames.map((name, i) => ({ id: String(i), name }));
+  const imageFileIds = await fetchImageFileIdsFromDmThread(botToken, channelId, latest.ts);
+  return {
+    dishes: lines.map((name, i) => ({ id: String(i), name })),
+    imageFileIds,
+  };
 }
 
-function buildSlackBlocks(dishes) {
+function buildSlackBlocks(dishes, imageFileIds = []) {
   const shown = dishes.slice(0, MAX_DISHES);
   const columns = splitDishesIntoColumns(shown);
   let dishStartIndex = 0;
@@ -134,7 +167,23 @@ function buildSlackBlocks(dishes) {
       text: { type: 'mrkdwn', text: ':up: để upsize lên 35k' },
     },
   ];
+
+  if (imageFileIds.length) {
+    blocks.push({ type: 'divider' });
+    for (let i = 0; i < imageFileIds.length; i++) {
+      blocks.push({
+        type: 'image',
+        slack_file: { id: imageFileIds[i] },
+        alt_text: `Ảnh món ${i + 1}`,
+      });
+    }
+  }
+
   return blocks;
+}
+
+function blocksNeedBotToken(blocks) {
+  return blocks.some((b) => b.type === 'image' && b.slack_file?.id);
 }
 
 function buildSlackTextFallback(dishes) {
@@ -151,8 +200,9 @@ async function postToSlack(config, blocks, text) {
   const botToken = config['bot-token'];
 
   const body = { blocks, text };
+  const forceBotPost = blocksNeedBotToken(blocks);
 
-  if (webhookUrl && webhookUrl.trim()) {
+  if (webhookUrl && webhookUrl.trim() && !forceBotPost) {
     const res = await fetch(webhookUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -239,19 +289,25 @@ export async function handler(event) {
     if (!DISHES_TABLE_NAME) throw new Error('DISHES_TABLE_NAME not set');
 
     const menuDmUserId = config['menu-dm-user-id'] || MENU_DM_USER_ID_DEFAULT;
-    const dishes = await fetchDishesFromSlackDM(botToken, menuDmUserId);
-    if (dishes === null) {
+    const menuSource = await fetchDishesFromSlackDM(botToken, menuDmUserId);
+    if (menuSource === null) {
       console.log(
         'PostMenu: DM is "%s"; skipping channel post and DynamoDB (collect-orders / Zalo will skip)',
         SKIP_TODAY_DM_TEXT
       );
       return { ok: true, skipped: true, reason: 'skip_today_dm' };
     }
+
+    const { dishes, imageFileIds } = menuSource;
     if (!dishes.length) throw new Error('No dishes parsed from latest DM message');
 
-    const blocks = buildSlackBlocks(dishes);
+    const blocks = buildSlackBlocks(dishes, imageFileIds);
     const text = buildSlackTextFallback(dishes);
     const shownCount = Math.min(dishes.length, MAX_DISHES);
+
+    if (imageFileIds.length) {
+      console.log('PostMenu: embedding', imageFileIds.length, 'image(s) from DM thread');
+    }
 
     const { channel_id, message_ts } = await postToSlack(config, blocks, text);
 
@@ -263,8 +319,16 @@ export async function handler(event) {
       await addReactionsToMessage(botToken, channel_id, message_ts, reactionNames);
     }
 
-    console.log('Posted menu to channel', channel_id, 'message_ts', message_ts, 'dishes saved to DynamoDB');
-    return { ok: true, channel_id, message_ts, dish_count: shownCount };
+    console.log(
+      'Posted menu to channel',
+      channel_id,
+      'message_ts',
+      message_ts,
+      'dishes saved to DynamoDB',
+      'images',
+      imageFileIds.length
+    );
+    return { ok: true, channel_id, message_ts, dish_count: shownCount, image_count: imageFileIds.length };
   } catch (err) {
     console.error('PostMenu error:', err);
     throw err;

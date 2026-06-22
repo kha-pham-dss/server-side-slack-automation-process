@@ -149,9 +149,7 @@ export async function handler(event) {
       const ping = reconcileUid ? `<@${reconcileUid}> ` : '';
       if (order?.dishIndices?.length) {
         const userName = userIdToName[triggeringUserId] ?? triggeringUserId;
-        const line = formatOrderLine(userName, order, dishes, defaultPrice, upPrice, {
-          includeNames: false,
-        });
+        const line = formatOrderLine(userName, order, dishes, defaultPrice, upPrice);
         await postReplyInThread(botToken, channel_id, message_ts, `${ping}${line}`);
       } else {
         await postReplyInThread(

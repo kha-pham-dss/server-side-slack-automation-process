@@ -79,16 +79,11 @@ export function formatOrderLine(
   order,
   dishes,
   defaultPrice = DEFAULT_MEAL_PRICE,
-  upPrice = UPSIZE_MEAL_PRICE,
-  { includeNames = true } = {}
+  upPrice = UPSIZE_MEAL_PRICE
 ) {
-  const nums = formatDishNumbers(order.dishIndices);
   const priceLabel = formatPriceLabel(order.price, defaultPrice, upPrice);
-  if (!includeNames) {
-    return `suất ${priceLabel} ${nums}, cho ${userName}`;
-  }
   const names = formatDishNames(order.dishIndices, dishes);
-  return `suất ${priceLabel} ${nums} (${names}), cho ${userName}`;
+  return `suất ${priceLabel} ${names}, cho ${userName}`;
 }
 
 /**
@@ -277,6 +272,7 @@ export async function persistOrdersToSheet({
   userIdToName,
   summaryText,
   zaloCell,
+  dishes,
 }) {
   const ordersUserRange = config['orders-user-range'] || 'A15:A100';
   const ordersSlackIdRange = resolveOrdersSlackIdRange(config);
@@ -295,7 +291,8 @@ export async function persistOrdersToSheet({
     ordersMaxDays,
     ordersByUserId,
     userIdToNameKeys,
-    userIdToName
+    userIdToName,
+    dishes
   );
 
   if (summaryText) {
@@ -324,6 +321,7 @@ export async function syncOrdersToSheetAndSummary(params) {
     userIdToName: agg.userIdToName,
     summaryText,
     zaloCell: agg.zaloCell,
+    dishes: agg.dishes,
   });
 
   return { ...agg, summaryText };
@@ -360,19 +358,16 @@ async function listMatchedUserIds(
   return matchedUserIds;
 }
 
-/** Chia món thành 2–3 cột, ~3–4 món/cột. */
+/** Chia món thành các cột, tối đa 5 món/cột (1–5 | 6–10 | 11–15 | …). */
 export function splitDishesIntoColumns(dishes) {
   const count = dishes.length;
   if (count === 0) return [];
 
-  const numCols = count <= 8 ? 2 : 3;
-  const perCol = Math.ceil(count / numCols);
+  const MAX_PER_COL = 5;
   /** @type {typeof dishes[]} */
   const columns = [];
-  for (let c = 0; c < numCols; c++) {
-    const start = c * perCol;
-    const chunk = dishes.slice(start, start + perCol);
-    if (chunk.length) columns.push(chunk);
+  for (let start = 0; start < count; start += MAX_PER_COL) {
+    columns.push(dishes.slice(start, start + MAX_PER_COL));
   }
   return columns;
 }
@@ -418,7 +413,7 @@ export async function writeZaloSummaryCell(sheets, spreadsheetId, sheetName, cel
 }
 
 /**
- * Ghi đơn từng user (cột món = "1+2+3", cột giá) + trả về thứ tự Slack user ID đã khớp.
+ * Ghi đơn từng user (cột món = tên món "Phở+Bún+...", cột giá) + trả về thứ tự Slack user ID đã khớp.
  * @returns {Promise<{ unmatchedUserIds: string[]; matchedUserIds: string[] }>}
  */
 export async function writeOrdersToSheet(
@@ -432,7 +427,8 @@ export async function writeOrdersToSheet(
   ordersMaxDays,
   ordersByUserId,
   userIdToNameKeys,
-  userIdToName
+  userIdToName,
+  dishes = []
 ) {
   const quoted = quoteSheetTabName(ordersSheetName);
   const userRange = `${quoted}!${ordersUserRange}`;
@@ -496,7 +492,7 @@ export async function writeOrdersToSheet(
     const hit = findOrderForSheetRow(userNameInSheet, sheetSlackId, ordersByUserId, userIdToNameKeys);
     if (hit && hit.order.dishIndices.length > 0) {
       matchedUserIds.push(hit.userId);
-      newBlock.push([formatDishNumbers(hit.order.dishIndices), hit.order.price]);
+      newBlock.push([formatDishNames(hit.order.dishIndices, dishes), hit.order.price]);
     } else {
       newBlock.push(['', '']);
     }
