@@ -2,7 +2,7 @@
  * Slack Events API endpoint (Lambda Function URL).
  * - url_verification: return challenge.
  * - Reply trong thread menu + @Mr.Chef → CollectOrders (sheet + :white_check_mark: trên reply).
- * - Cùng luồng đó nhưng sau 10:45 GMT+7 → thêm thread reply @RECONCILE_NOTIFY_SLACK_USER_ID (nhắc re-send Zalo).
+ * - Cùng luồng đó nhưng sau 10:45 GMT+7 → thread reply chỉ @RECONCILE_NOTIFY_SLACK_USER_ID (nhắc gửi lại Zalo).
  */
 
 import crypto from 'crypto';
@@ -10,6 +10,12 @@ import { DynamoDBClient, GetItemCommand } from '@aws-sdk/client-dynamodb';
 import { unmarshall } from '@aws-sdk/util-dynamodb';
 import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
 import { SSMClient, GetParameterCommand } from '@aws-sdk/client-ssm';
+import {
+  CACHE_TTL_MS,
+  SLACK_SIGNATURE_MAX_AGE_SEC,
+  dateKeyGmt7,
+  isAfterZaloSummaryCutoffNow,
+} from '@slack-dishes/shared/time-constants.js';
 
 const dynamo = new DynamoDBClient();
 const lambda = new LambdaClient();
@@ -22,10 +28,8 @@ const RECONCILE_NOTIFY_SLACK_USER_ID = 'U02SJRNAM2M';
 
 /** @type {{ value: string | null | undefined; at: number }} */
 let mrChefUserIdCache = { value: undefined, at: 0 };
-const MR_CHEF_CACHE_MS = 60_000;
 /** @type {{ value: string | null | undefined; at: number }} */
 let botTokenCache = { value: undefined, at: 0 };
-const BOT_TOKEN_CACHE_MS = 60_000;
 
 function messageMentionsSlackUser(text, slackUserId) {
   if (!text || !slackUserId) return false;
@@ -37,7 +41,7 @@ async function getMrChefSlackUserId() {
   const fromEnv = (process.env.MR_CHEF_SLACK_USER_ID || '').trim();
   if (fromEnv) return fromEnv;
 
-  if (Date.now() - mrChefUserIdCache.at < MR_CHEF_CACHE_MS && mrChefUserIdCache.value !== undefined) {
+  if (Date.now() - mrChefUserIdCache.at < CACHE_TTL_MS && mrChefUserIdCache.value !== undefined) {
     return mrChefUserIdCache.value;
   }
 
@@ -65,7 +69,7 @@ async function getBotToken() {
   const fromEnv = (process.env.BOT_TOKEN || '').trim();
   if (fromEnv) return fromEnv;
 
-  if (Date.now() - botTokenCache.at < BOT_TOKEN_CACHE_MS && botTokenCache.value !== undefined) {
+  if (Date.now() - botTokenCache.at < CACHE_TTL_MS && botTokenCache.value !== undefined) {
     return botTokenCache.value;
   }
 
@@ -90,7 +94,7 @@ async function getBotToken() {
 }
 
 function dateKey() {
-  return new Date().toISOString().slice(0, 10);
+  return dateKeyGmt7();
 }
 
 /** So khớp ts menu (DynamoDB) với reaction item.ts dù Slack khác độ chính xác chuỗi. */
@@ -106,15 +110,6 @@ function isReplyUnderTodayMenu(channel, threadTs, menu) {
   return normalizeSlackTs(threadTs) === normalizeSlackTs(menu.message_ts);
 }
 
-function isAfterZaloSummaryCutoffNow() {
-  const now = new Date();
-  const gmt7Ms = now.getTime() + 7 * 60 * 60 * 1000;
-  const gmt7 = new Date(gmt7Ms);
-  const hour = gmt7.getUTCHours();
-  const minute = gmt7.getUTCMinutes();
-  return hour > 10 || (hour === 10 && minute >= 45);
-}
-
 async function getSigningSecret() {
   const res = await ssm.send(
     new GetParameterCommand({
@@ -127,8 +122,7 @@ async function getSigningSecret() {
 
 function verifySlackSignature(rawBody, signature, timestamp, signingSecret) {
   if (!signingSecret || !signature || !timestamp) return false;
-  const fiveMinutes = 5 * 60;
-  if (Math.abs(Date.now() / 1000 - Number(timestamp)) > fiveMinutes) return false;
+  if (Math.abs(Date.now() / 1000 - Number(timestamp)) > SLACK_SIGNATURE_MAX_AGE_SEC) return false;
   const sigBasestring = `v0:${timestamp}:${rawBody}`;
   const hmac = crypto.createHmac('sha256', signingSecret);
   hmac.update(sigBasestring);
@@ -249,8 +243,7 @@ export async function handler(event) {
         process.env.RECONCILE_NOTIFY_SLACK_USER_ID || RECONCILE_NOTIFY_SLACK_USER_ID
       ).trim();
       const ping = reconcileUid ? `<@${reconcileUid}> ` : '';
-      const actor = ev.user ? `<@${ev.user}>` : 'A user';
-      const text = `${ping}${actor} vừa @ bot sau 10:45 (sau khi zalo-sheet-summary chạy). Vui lòng manual re-sent zalo msg.`;
+      const text = `${ping}Có cập nhật đặt món sau khi đã gửi Zalo.`;
       postSlackThreadReply(botToken, menu.channel_id, menu.message_ts, text)
         .then(() => console.log('menu @mention after 10:45: posted reconcile ping', { user: ev.user }))
         .catch((e) => console.warn('menu @mention after 10:45: ping failed', e?.message || e));

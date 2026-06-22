@@ -1,3 +1,5 @@
+import { nowGmt7 } from './time-constants.js';
+
 /** Cột ghi Slack user ID trên sheet; ghi đè bằng SSM orders-slack-id-column. */
 export const DEFAULT_ORDERS_SLACK_ID_COLUMN = 'BZ';
 
@@ -108,7 +110,7 @@ export function findOrderForSheetRow(sheetName, sheetSlackId, ordersByUserId, us
 }
 
 export function getDishesSheetNameForCurrentMonth() {
-  const gmt7 = new Date(Date.now() + 7 * 60 * 60 * 1000);
+  const gmt7 = nowGmt7();
   const month = gmt7.getUTCMonth() + 1;
   const year = gmt7.getUTCFullYear();
   return `Tháng ${month} / ${year}`;

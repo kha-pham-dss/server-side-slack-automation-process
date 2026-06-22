@@ -10,6 +10,8 @@ import { SSMClient, GetParametersByPathCommand } from '@aws-sdk/client-ssm';
 import { DynamoDBClient, PutItemCommand } from '@aws-sdk/client-dynamodb';
 import { marshall } from '@aws-sdk/util-dynamodb';
 import { google } from 'googleapis';
+import { CACHE_TTL_MS, POST_MENU_REACTION_DELAY_MS, dateKeyGmt7 } from '@slack-dishes/shared/time-constants.js';
+import { getDishesSheetNameForCurrentMonth } from '@slack-dishes/shared/sheet-slack.js';
 
 const ssm = new SSMClient();
 const dynamo = new DynamoDBClient();
@@ -20,7 +22,6 @@ const PARAMETER_PREFIX = process.env.PARAMETER_PREFIX || '/slack-dishes';
 /** @type {Record<string, string>} */
 let configCache = {};
 let configCacheTime = 0;
-const CACHE_TTL_MS = 60_000;
 
 async function loadAllParametersByPath() {
   const pathPrefix = PARAMETER_PREFIX.endsWith('/') ? PARAMETER_PREFIX.slice(0, -1) : PARAMETER_PREFIX;
@@ -65,14 +66,6 @@ function getSheetsClient(credentialsJson) {
 }
 
 const MENU_DM_USER_ID_DEFAULT = 'U02SJRNAM2M';
-
-/** Sheet tab name: "Tháng {month} / {year}" (e.g. Tháng 2 / 2026). Uses UTC. */
-function getDishesSheetNameForCurrentMonth() {
-  const d = new Date();
-  const month = d.getUTCMonth() + 1;
-  const year = d.getUTCFullYear();
-  return `Tháng ${month} / ${year}`;
-}
 
 /** Nội dung DM đúng chuỗi này → không đăng menu, không ghi DynamoDB (collect-orders sẽ không có menu hôm nay). */
 const SKIP_TODAY_DM_TEXT = 'Bỏ qua hôm nay';
@@ -260,7 +253,6 @@ async function postToSlack(config, blocks, text) {
  * Gửi tuần tự + delay ngắn để Slack thường hiển thị đúng thứ tự (Slack không cho API chỉ định thứ tự).
  */
 async function addReactionsToMessage(botToken, channelId, messageTs, emojiNames) {
-  const delayMs = 1000;
   for (let i = 0; i < emojiNames.length; i++) {
     const name = emojiNames[i];
     const res = await fetch('https://slack.com/api/reactions.add', {
@@ -279,7 +271,7 @@ async function addReactionsToMessage(botToken, channelId, messageTs, emojiNames)
     if (!data.ok) {
       console.warn('reactions.add failed for', name, data.error);
     }
-    if (i > 0) await new Promise((r) => setTimeout(r, delayMs));
+    if (i > 0) await new Promise((r) => setTimeout(r, POST_MENU_REACTION_DELAY_MS));
   }
 }
 
@@ -287,7 +279,7 @@ async function addReactionsToMessage(botToken, channelId, messageTs, emojiNames)
  * Store today's menu message in DynamoDB.
  */
 function dateKey() {
-  return new Date().toISOString().slice(0, 10); // YYYY-MM-DD UTC
+  return dateKeyGmt7();
 }
 
 async function storeMenuMessage(channelId, messageTs, dishCount) {

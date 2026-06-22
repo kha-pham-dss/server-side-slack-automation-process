@@ -1,5 +1,5 @@
 /**
- * CollectOrders Lambda (10:20 UTC).
+ * CollectOrders Lambda (10:20 GMT+7).
  * Reads today's menu message from DynamoDB, calls Slack reactions.get, resolves user_id → user name
  * via Slack users.list (paginated), then writes each user's order into the Google Sheet.
  * Row match: optional Slack user ID column (stable when display name changes), else any profile name alias.
@@ -16,6 +16,7 @@ import {
   resolveOrdersSlackIdRange,
   resolveSlackUserProfiles,
 } from '@slack-dishes/shared';
+import { CACHE_TTL_MS, nowGmt7, dateKeyGmt7 } from '@slack-dishes/shared/time-constants.js';
 
 const dynamo = new DynamoDBClient();
 
@@ -24,7 +25,6 @@ const TABLE_NAME = process.env.TABLE_NAME;
 /** @type {Record<string, string>} */
 let configCache = {};
 let configCacheTime = 0;
-const CACHE_TTL_MS = 60_000;
 
 async function getConfig() {
   if (Date.now() - configCacheTime < CACHE_TTL_MS && Object.keys(configCache).length > 0) {
@@ -36,7 +36,7 @@ async function getConfig() {
 }
 
 function dateKey() {
-  return new Date().toISOString().slice(0, 10); // YYYY-MM-DD UTC
+  return dateKeyGmt7();
 }
 
 async function getTodayMenuMessage() {
@@ -205,7 +205,7 @@ async function writeOrdersToSheet(
 
   const match = ordersUserRange.match(/^([A-Z]+)(\d+):([A-Z]+)(\d+)$/i) || ordersUserRange.match(/^([A-Z]+)(\d+)$/i);
   const startRow = match ? parseInt(match[2], 10) : 15;
-  const todayDay = new Date(Date.now() + 7 * 60 * 60 * 1000).getUTCDate();
+  const todayDay = nowGmt7().getUTCDate();
 
   let startCol1Based = 2;
   const colStr = ordersColumnStart.toUpperCase();

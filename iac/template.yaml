@@ -30,6 +30,8 @@ Resources:
 
   PostMenuFunction:
     Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
     Properties:
       FunctionName: slack-dishes-post-menu
       CodeUri: ../serverless/post-menu
@@ -127,6 +129,8 @@ Resources:
 
   ZaloSheetSummaryFunction:
     Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
     Properties:
       FunctionName: slack-dishes-zalo-sheet-summary
       CodeUri: ../serverless/zalo-sheet-summary
@@ -162,6 +166,8 @@ Resources:
 
   SlackEventsFunction:
     Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
     Properties:
       FunctionName: slack-dishes-slack-events
       CodeUri: ../serverless/slack-events

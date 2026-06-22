@@ -9,6 +9,8 @@ import { DynamoDBClient, GetItemCommand } from '@aws-sdk/client-dynamodb';
 import { unmarshall } from '@aws-sdk/util-dynamodb';
 import { google } from 'googleapis';
 import { Zalo, ThreadType } from 'zca-js';
+import { dateKeyGmt7 } from '@slack-dishes/shared/time-constants.js';
+import { getDishesSheetNameForCurrentMonth } from '@slack-dishes/shared/sheet-slack.js';
 
 /** TODO: set false trước khi deploy — tạm thời chỉ log, không gửi Zalo. */
 const ZALO_SEND_DISABLED = false;
@@ -22,9 +24,9 @@ const DIGIT_EMOJI = ['one', 'two', 'three', 'four', 'five', 'six'];
 
 const dynamo = new DynamoDBClient();
 
-/** Cùng khóa ngày với post-menu / collect-orders (UTC YYYY-MM-DD). */
+/** Cùng khóa ngày với post-menu / collect-orders (GMT+7 YYYY-MM-DD). */
 function dateKey() {
-  return new Date().toISOString().slice(0, 10);
+  return dateKeyGmt7();
 }
 
 async function getTodayMenuRow(tableName) {
@@ -89,31 +91,54 @@ function getSheetsClient(credentialsJson) {
   return google.sheets({ version: 'v4', auth });
 }
 
-/** Tab "Tháng M / YYYY" theo GMT+7 (giống collect-orders). */
-export function getDishesSheetNameForCurrentMonth() {
-  const gmt7 = new Date(Date.now() + 7 * 60 * 60 * 1000);
-  const month = gmt7.getUTCMonth() + 1;
-  const year = gmt7.getUTCFullYear();
-  return `Tháng ${month} / ${year}`;
-}
-
-/** Dòng tổng suất — "Tổng 8 suất", "Tổng: 8 suất", "Tổng cộng 8 suất anh nhé". */
-const TOTAL_LINE_RE = /tổng[^.\n]{0,48}\d+[^.\n]{0,24}suất/i;
-
 function normCellText(s) {
   return String(s ?? '')
     .normalize('NFC')
+    .replace(/\u00a0/g, ' ')
+    .replace(/\s+/g, ' ')
     .trim();
 }
 
-function isTotalServingsLine(s) {
-  return TOTAL_LINE_RE.test(normCellText(s));
+/** Bỏ dấu tiếng Việt — so khớp "Tổng"/"Tong", "suất"/"suat". */
+function foldVi(s) {
+  return normCellText(s)
+    .normalize('NFD')
+    .replace(/\p{M}/gu, '')
+    .toLowerCase();
 }
 
-/** Nới hơn regex — "Tổng suất 8", text có cả hai từ. */
 function looksLikeTotalLine(s) {
-  const t = normCellText(s).toLowerCase();
-  return t.includes('tổng') && t.includes('suất');
+  const f = foldVi(s);
+  return f.includes('tong') && f.includes('suat');
+}
+
+/**
+ * Lấy số suất từ một dòng Tổng. Hỗ trợ:
+ * - Tổng 11 suất / Tổng: 11 suất
+ * - Tổng suất: 11 / Tổng suất 11
+ * - Tổng: 11 (không có chữ suất sau số)
+ */
+export function extractTotalServingsFromLine(line) {
+  const t = normCellText(line);
+  if (!looksLikeTotalLine(t) && !foldVi(t).includes('tong')) return null;
+
+  const patterns = [
+    /tổng[^0-9\n]{0,32}(\d+)\s*suất/i,
+    /tổng\s*suất\s*:?\s*(\d+)/i,
+    /suất\s*:?\s*(\d+)/i,
+    /tổng\s*:?\s*(\d+)/i,
+  ];
+  for (const re of patterns) {
+    const m = t.match(re);
+    if (m) return parseInt(m[1], 10);
+  }
+
+  const beforeSuat = t.match(/(\d+)\s*suất/i);
+  if (beforeSuat) return parseInt(beforeSuat[1], 10);
+
+  const nums = [...t.matchAll(/(\d+)/g)].map((x) => parseInt(x[1], 10)).filter((n) => Number.isFinite(n));
+  if (nums.length) return nums[0];
+  return null;
 }
 
 function quoteSheetTabName(sheetName) {
@@ -266,13 +291,24 @@ export async function resolveSummaryCellRange(config, sheets, spreadsheetId, she
   return 'M58:M72';
 }
 
-/** Tìm số suất trong dòng kiểu "Tổng 8 suất", "Tổng: 8 suất", "tổng 0 suất". */
+/** Số suất từ dòng "Tổng …" cuối cùng trong snippet (hoặc dòng Tổng duy nhất). */
 export function parseTotalServings(lines) {
-  const re = /tổng[^.\n]{0,48}(\d+)[^.\n]{0,24}suất/i;
   let last = null;
-  for (const line of lines) {
-    const m = normCellText(line).match(re);
-    if (m) last = parseInt(m[1], 10);
+  let lastIdx = -1;
+  for (let i = 0; i < lines.length; i++) {
+    const n = extractTotalServingsFromLine(lines[i]);
+    if (n != null) {
+      last = n;
+      lastIdx = i;
+    }
+  }
+  if (last != null) {
+    console.log('Zalo parseTotalServings:', last, 'from line', JSON.stringify(lines[lastIdx]));
+  } else {
+    const candidates = lines.filter((l) => looksLikeTotalLine(l));
+    if (candidates.length) {
+      console.warn('Zalo parseTotalServings: có dòng Tổng nhưng không đọc được số:', candidates);
+    }
   }
   return last;
 }
@@ -283,7 +319,7 @@ export function parseTotalServings(lines) {
  */
 export function parseFortyKPortionsFromText(text) {
   if (!text || typeof text !== 'string') return 0;
-  const re = /(?<![0-9])(\d+)\s+40k\b/gi;
+  const re = /(?<![0-9])(\d+)\s*40\s*k\b/gi;
   let sum = 0;
   let m;
   while ((m = re.exec(text)) !== null) {
@@ -373,7 +409,8 @@ async function reconcileSlackVsSheet(config, lines, bodyForParse) {
   const sheetTotal = parseTotalServings(lines);
   const sheet40k = parseFortyKPortionsFromText(bodyForParse || '');
 
-  const comparedTotal = sheetTotal != null;
+  // Chỉ so Tổng khi parse được số từ dòng Tổng (tránh coi thiếu parse = 0 suất)
+  const comparedTotal = sheetTotal != null && lines.some((l) => looksLikeTotalLine(l));
   const totalMatch = !comparedTotal || slackDish === sheetTotal;
   const upMatch = slackUp === sheet40k;
 

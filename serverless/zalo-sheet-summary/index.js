@@ -4,6 +4,7 @@
 
 import { SSMClient, GetParametersByPathCommand } from '@aws-sdk/client-ssm';
 import { runFromConfig } from './job.js';
+import { CACHE_TTL_MS } from '@slack-dishes/shared/time-constants.js';
 
 const ssm = new SSMClient();
 const PARAMETER_PREFIX = process.env.PARAMETER_PREFIX || '/slack-dishes';
@@ -11,7 +12,6 @@ const PARAMETER_PREFIX = process.env.PARAMETER_PREFIX || '/slack-dishes';
 /** @type {Record<string, string>} */
 let configCache = {};
 let configCacheTime = 0;
-const CACHE_TTL_MS = 60_000;
 
 /** SSM GetParametersByPath returns at most 10 parameters per call — must follow NextToken. */
 async function loadAllParametersByPath() {

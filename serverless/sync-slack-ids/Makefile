@@ -5,4 +5,5 @@ build-SyncSlackIdsFunction:
 	cp package.json package-lock.json index.js $(ARTIFACTS_DIR)/
 	cd $(ARTIFACTS_DIR) && npm ci --omit=dev
 	mkdir -p $(ARTIFACTS_DIR)/node_modules/@slack-dishes
+	rm -rf $(ARTIFACTS_DIR)/node_modules/@slack-dishes/shared
 	cp -r $(SHARED_SRC) $(ARTIFACTS_DIR)/node_modules/@slack-dishes/shared

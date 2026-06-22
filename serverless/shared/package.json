@@ -2,5 +2,10 @@
   "name": "@slack-dishes/shared",
   "version": "1.0.0",
   "type": "module",
-  "main": "index.js"
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./time-constants.js": "./time-constants.js",
+    "./sheet-slack.js": "./sheet-slack.js"
+  }
 }
