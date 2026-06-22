@@ -181,6 +181,30 @@ Resources:
             Description: Invoke Zalo sheet summary at 11:00 GMT+7 (VNT)
             Enabled: true
 
+  ControlChannelPostFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: slack-dishes-control-channel-post
+      CodeUri: ../serverless/control-channel-post
+      Handler: index.handler
+      Description: 'POST command from control channel → chat.postMessage to channel-id (SSM).'
+      Environment:
+        Variables:
+          PARAMETER_PREFIX: /slack-dishes
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - ssm:GetParameter
+                - ssm:GetParameters
+                - ssm:GetParametersByPath
+              Resource:
+                - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/slack-dishes'
+                - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/slack-dishes/*'
+
   SlackEventsFunction:
     Type: AWS::Serverless::Function
     Metadata:
@@ -189,11 +213,12 @@ Resources:
       FunctionName: slack-dishes-slack-events
       CodeUri: ../serverless/slack-events
       Handler: index.handler
-      Description: Receives Slack Events API; menu-thread @Mr.Chef → CollectOrders; after 11:00 GMT+7 updates sheet and pings RECONCILE_NOTIFY_SLACK_USER_ID with user order.
+      Description: 'Slack Events API; control channel POST → ControlChannelPost; menu @Mr.Chef → CollectOrders.'
       Environment:
         Variables:
           TABLE_NAME: !Ref MenuMessageTable
           COLLECT_ORDERS_FUNCTION_NAME: !Ref CollectOrdersFunction
+          CONTROL_CHANNEL_POST_FUNCTION_NAME: !Ref ControlChannelPostFunction
           PARAMETER_PREFIX: /slack-dishes
           # Slack user id (e.g. U01ABC…) for Mr.Chef; menu-thread replies must @-mention this user to trigger CollectOrders. Override SSM /slack-dishes/mr-chef-user-id when non-empty.
           MR_CHEF_SLACK_USER_ID: ''
@@ -213,7 +238,9 @@ Resources:
             - Effect: Allow
               Action:
                 - lambda:InvokeFunction
-              Resource: !GetAtt CollectOrdersFunction.Arn
+              Resource:
+                - !GetAtt CollectOrdersFunction.Arn
+                - !GetAtt ControlChannelPostFunction.Arn
       FunctionUrlConfig:
         AuthType: NONE
         Cors:
@@ -253,3 +280,6 @@ Outputs:
   SlackEventsFunctionArn:
     Description: SlackEvents Lambda ARN
     Value: !GetAtt SlackEventsFunction.Arn
+  ControlChannelPostFunctionArn:
+    Description: ControlChannelPost Lambda ARN (invoke from slack-events on POST command in control channel)
+    Value: !GetAtt ControlChannelPostFunction.Arn

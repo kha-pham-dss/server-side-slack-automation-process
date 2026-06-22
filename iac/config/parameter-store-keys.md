@@ -9,8 +9,9 @@ Lambda đọc SSM bằng `GetParametersByPath` có **phân trang** (mỗi lần 
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `/slack-dishes/bot-token` | SecureString | Slack Bot User OAuth Token (xoxb-...). Scopes: `chat:write`, `reactions:read`, `reactions:write`, `users:read`, `im:write`, `im:history` (DM to read menu from menu source user). |
-| `/slack-dishes/signing-secret` | SecureString | Slack Signing Secret (from app Basic Information). Required for Slack Events API endpoint (SlackEvents Lambda) to verify requests. Slack app Event Subscriptions: **message.channels** (+ **message.groups** nếu kênh private). Sau 10:45 GMT+7, @Mr.Chef dưới menu → CollectOrders + ping reconcile user. |
-| `/slack-dishes/channel-id` | String | Target Slack channel ID where the menu is posted |
+| `/slack-dishes/signing-secret` | SecureString | Slack Signing Secret (from app Basic Information). Required for Slack Events API endpoint (SlackEvents Lambda) to verify requests. Slack app Event Subscriptions: **message.channels** (+ **message.groups** nếu kênh private). Control channel: tin `POST: …` → gửi vào `channel-id`. Menu thread: @Mr.Chef → CollectOrders. |
+| `/slack-dishes/channel-id` | String | Target Slack channel ID where the menu is posted; **control-channel-post** cũng gửi tin `POST:` vào đây |
+| `/slack-dishes/control-channel-id` | String (optional) | Channel **private** gửi lệnh `POST: …`. slack-events nhận event → invoke control-channel-post. Bot phải được invite; quyền gửi lệnh qua membership channel. Subscribe **message.groups** nếu channel private. |
 | `/slack-dishes/menu-dm-user-id` | String (optional) | Slack user ID whose **latest DM message** is used as menu source (first line = title, skip; rest = dish names). Default: `U02SJRNAM2M`. |
 | `/slack-dishes/webhook-url` | SecureString (optional) | Incoming Webhook URL; if set, PostMenu posts via webhook instead of chat.postMessage |
 | `/slack-dishes/sheet-id` | String | Google Spreadsheet ID (CollectOrders / Zalo ghi orders + ô S62; PostMenu không ghi sheet) |
@@ -39,6 +40,8 @@ Example (AWS CLI):
 ```bash
 aws ssm put-parameter --name /slack-dishes/bot-token --value "xoxb-..." --type SecureString
 aws ssm put-parameter --name /slack-dishes/channel-id --value "C08DWNHH753" --type String
+# Control channel (private) — POST: @channel, nội dung... → bot gửi vào channel-id:
+# aws ssm put-parameter --name /slack-dishes/control-channel-id --value "C0CONTROL123" --type String
 # Optional:
 aws ssm put-parameter --name /slack-dishes/webhook-url --value "https://hooks.slack.com/..." --type SecureString
 # For Lambda + Google Sheets API (Option A):

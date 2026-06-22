@@ -1,6 +1,7 @@
 /**
  * Slack Events API endpoint (Lambda Function URL).
  * - url_verification: return challenge.
+ * - Control channel: `POST: …` → invoke control-channel-post (gửi vào channel-id).
  * - Reply trong thread menu + @Mr.Chef → CollectOrders (sheet + :white_check_mark: trên reply).
  * - Cùng luồng đó nhưng sau 11:00 GMT+7 → collect-orders cập nhật sheet + ping RECONCILE_NOTIFY_SLACK_USER_ID kèm món user đặt.
  */
@@ -23,15 +24,46 @@ const ssm = new SSMClient();
 
 const TABLE_NAME = process.env.TABLE_NAME;
 const COLLECT_ORDERS_FUNCTION_NAME = process.env.COLLECT_ORDERS_FUNCTION_NAME;
+const CONTROL_CHANNEL_POST_FUNCTION_NAME = process.env.CONTROL_CHANNEL_POST_FUNCTION_NAME;
 const PARAMETER_PREFIX = process.env.PARAMETER_PREFIX || '/slack-dishes';
 
 /** @type {{ value: string | null | undefined; at: number }} */
 let mrChefUserIdCache = { value: undefined, at: 0 };
+/** @type {{ value: string | null | undefined; at: number }} */
+let controlChannelIdCache = { value: undefined, at: 0 };
 
 function messageMentionsSlackUser(text, slackUserId) {
   if (!text || !slackUserId) return false;
   // Slack: <@U123> or <@U123|display name>
   return text.includes(`<@${slackUserId}`);
+}
+
+function isPostCommand(text) {
+  return /^POST:\s+/i.test((text || '').trim());
+}
+
+async function getControlChannelId() {
+  if (Date.now() - controlChannelIdCache.at < CACHE_TTL_MS && controlChannelIdCache.value !== undefined) {
+    return controlChannelIdCache.value;
+  }
+
+  try {
+    const res = await ssm.send(
+      new GetParameterCommand({
+        Name: `${PARAMETER_PREFIX}/control-channel-id`,
+        WithDecryption: false,
+      })
+    );
+    const id = (res.Parameter?.Value ?? '').trim() || null;
+    controlChannelIdCache = { value: id, at: Date.now() };
+    return id;
+  } catch (e) {
+    if (e?.name === 'ParameterNotFound') {
+      controlChannelIdCache = { value: null, at: Date.now() };
+      return null;
+    }
+    throw e;
+  }
 }
 
 async function getMrChefSlackUserId() {
@@ -134,6 +166,16 @@ async function invokeCollectOrders(replyChannelId, replyTs, userId, afterZaloCut
   );
 }
 
+async function invokeControlChannelPost(payload) {
+  await lambda.send(
+    new InvokeCommand({
+      FunctionName: CONTROL_CHANNEL_POST_FUNCTION_NAME,
+      InvocationType: 'Event',
+      Payload: JSON.stringify(payload),
+    })
+  );
+}
+
 export async function handler(event) {
   const rawBody =
     typeof event.body === 'string'
@@ -170,13 +212,30 @@ export async function handler(event) {
   }
 
   const ev = body.event;
-  if (ev?.type !== 'message' || ev.bot_id) {
+  if (ev?.type !== 'message' || ev.bot_id || ev.subtype) {
     return { statusCode: 200, body: '' };
   }
 
   const threadTs = ev.thread_ts || ev.ts;
   const channel = ev.channel;
   const replyTs = ev.ts;
+
+  const controlChannelId = await getControlChannelId();
+  if (
+    controlChannelId &&
+    channel === controlChannelId &&
+    !ev.thread_ts &&
+    isPostCommand(ev.text) &&
+    CONTROL_CHANNEL_POST_FUNCTION_NAME
+  ) {
+    await invokeControlChannelPost({
+      userId: ev.user,
+      controlChannelId: channel,
+      ackMessageTs: ev.ts,
+      text: ev.text,
+    });
+    return { statusCode: 200, body: '' };
+  }
 
   const menu = await getTodayMenuMessage();
   if (!isReplyUnderTodayMenu(channel, threadTs, menu)) {
