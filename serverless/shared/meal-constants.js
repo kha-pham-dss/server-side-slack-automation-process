@@ -3,7 +3,12 @@ export const DEFAULT_MEAL_PRICE = 30_000;
 export const UPSIZE_MEAL_PRICE = 35_000;
 
 export const MAX_DISHES = 20;
-export const MAX_DISHES_PER_USER = 5;
+/** Suất 30k — tối đa món/user (không :up:). */
+export const MAX_DISHES_PER_USER_DEFAULT = 4;
+/** Suất 35k — tối đa món/user (có :up:). */
+export const MAX_DISHES_PER_USER_UPSIZE = 5;
+/** @deprecated Dùng {@link MAX_DISHES_PER_USER_UPSIZE} hoặc tier theo giá. */
+export const MAX_DISHES_PER_USER = MAX_DISHES_PER_USER_UPSIZE;
 
 export const UP_EMOJI = 'up';
 

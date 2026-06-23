@@ -2,7 +2,7 @@
  * Slack Events API endpoint (Lambda Function URL).
  * - url_verification: return challenge.
  * - Control channel: `POST: …` → gửi vào channel-id (chạy inline).
- * - Reply trong thread menu + @Mr.Chef → CollectOrders (sheet + :white_check_mark: trên reply).
+ * - Reply trong thread menu hôm nay + @Mr.Chef → CollectOrders (bắt buộc `thread_ts`).
  * - Cùng luồng đó nhưng sau 11:00 GMT+7 → collect-orders cập nhật sheet + ping RECONCILE_NOTIFY_SLACK_USER_ID kèm món user đặt.
  */
 
@@ -278,12 +278,12 @@ export async function handler(event) {
   }
 
   const menu = await getTodayMenuMessage();
-  if (!isReplyUnderTodayMenu(channel, threadTs, menu)) {
+  if (!isReplyUnderTodayMenu(channel, threadTs, menu) || !inThread) {
     return { statusCode: 200, body: '' };
   }
 
   const mrChefId = await getMrChefSlackUserId();
-  if (!mrChefId || !messageMentionsSlackUser(ev.text, mrChefId)) {
+  if (!mrChefId || !messageMentionsSlackUser(messageText, mrChefId)) {
     return { statusCode: 200, body: '' };
   }
 

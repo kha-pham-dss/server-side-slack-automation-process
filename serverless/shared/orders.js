@@ -1,7 +1,8 @@
 import {
   DEFAULT_MEAL_PRICE,
   UPSIZE_MEAL_PRICE,
-  MAX_DISHES_PER_USER,
+  MAX_DISHES_PER_USER_DEFAULT,
+  MAX_DISHES_PER_USER_UPSIZE,
   UP_EMOJI,
   ZALO_SUMMARY_CELL_DEFAULT,
   dishIndexFromEmoji,
@@ -20,7 +21,8 @@ export function buildOrdersByUserId(
   upUserIds = new Set(),
   defaultPrice = DEFAULT_MEAL_PRICE,
   upPrice = UPSIZE_MEAL_PRICE,
-  maxDishesPerUser = MAX_DISHES_PER_USER
+  maxDefaultDishes = MAX_DISHES_PER_USER_DEFAULT,
+  maxUpsizeDishes = MAX_DISHES_PER_USER_UPSIZE
 ) {
   /** @type {Record<string, number[]>} */
   const userToDishIndices = {};
@@ -35,18 +37,25 @@ export function buildOrdersByUserId(
 
   /** @type {Record<string, { dishIndices: number[]; price: number }>} */
   const ordersByUserId = {};
-  /** @type {Array<{ userId: string; dishCount: number }>} */
+  /** @type {Array<{ userId: string; dishCount: number; maxDishes: number; price: number }>} */
   const cappedUserIds = [];
 
   for (const [uid, indices] of Object.entries(userToDishIndices)) {
     const sorted = [...indices].sort((a, b) => a - b);
-    const capped = sorted.slice(0, maxDishesPerUser);
-    if (sorted.length > maxDishesPerUser) {
-      cappedUserIds.push({ userId: uid, dishCount: sorted.length });
+    const isUpsize = upUserIds.has(uid);
+    const maxDishes = isUpsize ? maxUpsizeDishes : maxDefaultDishes;
+    const capped = sorted.slice(0, maxDishes);
+    if (sorted.length > maxDishes) {
+      cappedUserIds.push({
+        userId: uid,
+        dishCount: sorted.length,
+        maxDishes,
+        price: isUpsize ? upPrice : defaultPrice,
+      });
     }
     ordersByUserId[uid] = {
       dishIndices: capped,
-      price: upUserIds.has(uid) ? upPrice : defaultPrice,
+      price: isUpsize ? upPrice : defaultPrice,
     };
   }
 

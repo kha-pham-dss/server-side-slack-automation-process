@@ -181,6 +181,50 @@ Resources:
             Description: Invoke Zalo sheet summary at 11:00 GMT+7 (VNT)
             Enabled: true
 
+  ZaloMenuImagesFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: slack-dishes-zalo-menu-images
+      CodeUri: ../serverless/zalo-menu-images
+      Handler: index.handler
+      Description: Poll Zalo group for menu images (every 10 min); window gated in code from POST_MENU to ZALO_SUMMARY GMT+7.
+      Timeout: 120
+      Environment:
+        Variables:
+          PARAMETER_PREFIX: /slack-dishes
+          TABLE_NAME: !Ref MenuMessageTable
+          DISHES_TABLE_NAME: !Ref DishesMenuTable
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - ssm:GetParameter
+                - ssm:GetParameters
+                - ssm:GetParametersByPath
+              Resource:
+                - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/slack-dishes'
+                - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/slack-dishes/*'
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:UpdateItem
+              Resource:
+                - !GetAtt MenuMessageTable.Arn
+                - !GetAtt DishesMenuTable.Arn
+      Events:
+        ZaloMenuImagesPoll:
+          Type: Schedule
+          Properties:
+            # UTC 2:05–3:55 every 10 min (GMT+7 9:05–10:55). Lambda gates on POST_MENU / ZALO_SUMMARY constants.
+            # Nếu POST_MENU < 9h: mở rộng giờ UTC (vd. 1-3 khi menu 8h).
+            Schedule: cron(5/10 2-3 ? * MON-FRI *)
+            Name: zalo-menu-images-poll
+            Description: Zalo menu image poll every 10 min (window in Lambda)
+            Enabled: true
+
   ControlChannelPostFunction:
     Type: AWS::Serverless::Function
     Metadata:
@@ -275,6 +319,9 @@ Outputs:
   ZaloSheetSummaryFunctionArn:
     Description: Zalo sheet summary Lambda ARN
     Value: !GetAtt ZaloSheetSummaryFunction.Arn
+  ZaloMenuImagesFunctionArn:
+    Description: Zalo menu images poll Lambda ARN
+    Value: !GetAtt ZaloMenuImagesFunction.Arn
   SlackEventsFunctionUrl:
     Description: Slack Events API Request URL - set this in Slack app Event Subscriptions
     Value: !GetAtt SlackEventsFunctionUrl.FunctionUrl

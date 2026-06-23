@@ -12,11 +12,19 @@ Timeline (T2–T6):
   EventBridge ──────► PostMenu Lambda
                             │
                             ├──► SSM (config)
-                            ├──► Slack DM       (tin nhắn mới nhất từ menu-dm-user-id → parse món)
-                            ├──► Slack channel  (post menu + add reaction :one:…:twenty:, :up:)
+                            ├──► Slack DM       (tin mới nhất từ menu-dm-user-id → parse món)
+                            ├──► Slack channel  (post menu text; ảnh có thể thêm sau)
                             └──► DynamoDB
-                                  • slack-dishes-menu-message (channel_id, message_ts)
+                                  • slack-dishes-menu-message (channel_id, message_ts, …)
                                   • slack-dishes-dishes-menu   (danh sách món theo ngày)
+
+  Sau POST_MENU → trước ZALO_SUMMARY (mỗi 10 phút, nếu bật zalo-menu-source-user-id)
+  ─────────────
+  EventBridge ──────► ZaloMenuImages Lambda
+                            │
+                            ├──► Zalo group     (getGroupChatHistory — ảnh từ nhà bếp)
+                            ├──► Slack          (upload ảnh + chat.update tin menu)
+                            └──► DynamoDB       (zalo_synced_msg_ids, slack_image_file_ids)
 
   ─ ─ ─ ─ ─ ─ ─ ─ ─
   User react :one: … :twenty: chọn món (tối đa 5 món/user).
@@ -44,7 +52,7 @@ Timeline (T2–T6):
                                                         — không gửi lại Zalo
 ```
 
-**Tóm tắt:** 10h đăng menu → user react (≤5 món, :up: = 35k) → 11h Zalo lambda tổng hợp từ reactions, ghi sheet + S62, gửi Zalo (nếu bật). Reply @Mr.Chef dưới menu luôn chạy lại CollectOrders; sau 11h chỉ cập nhật sheet và ping reconcile thủ công.
+**Tóm tắt:** 10h đăng menu → user react (30k ≤4 món, `:up:` = 35k ≤5 món) → 11h Zalo lambda tổng hợp từ reactions, ghi sheet + S62, gửi Zalo (nếu bật). **CollectOrders** chỉ chạy khi reply @Mr.Chef trong thread menu; sau 11h cập nhật sheet + ping reconcile.
 
 ## PostMenu — tin Slack
 
@@ -55,7 +63,20 @@ Cấu trúc message (Block Kit):
 3. Danh sách món chia **các cột** (tối đa 5 món/cột: 1–5 | 6–10 | 11–15 | …), mỗi dòng `:emoji: (Tên món)`
 4. `:up: để upsize lên 35k`
 
-Nguồn món: DM Slack của user trong SSM `menu-dm-user-id` (tin mới nhất — mỗi dòng = một món; ảnh = reply trong thread dưới tin đó, nhúng vào tin menu channel). Sau khi post, danh sách món lưu vào DynamoDB **`slack-dishes-dishes-menu`** (partition key `date` GMT+7, attribute `dishes`). DM `Bỏ qua hôm nay` → không post Slack, không ghi DynamoDB.
+Nguồn món: bạn forward text menu từ Zalo → **Slack DM** (`menu-dm-user-id`, tin mới nhất — mỗi dòng = một món). PostMenu lúc 10h đăng menu **text trước** (chưa có ảnh vẫn post). DM `Bỏ qua hôm nay` → không post Slack, không ghi DynamoDB (Zalo 11h / CollectOrders cũng skip).
+
+**Ảnh món (tùy chọn):** set SSM `zalo-menu-source-user-id`. Lambda **zalo-menu-images** poll `zalo-group-id` **từ sau khi post menu đến trước gửi tổng suất Zalo** (mỗi 10 phút; cửa sổ theo `POST_MENU_*` / `ZALO_SUMMARY_*` trong `time-constants.js`). Hiện tại menu 10h → poll ~10:05–10:55; nếu đổi menu 9h chỉ cần sửa hằng số + cron PostMenu — poll tự kéo dài (~9:05–10:55).
+
+Lấy uid nhà bếp + kiểm tra shape tin ảnh:
+
+```bash
+npm install --prefix scripts/zalo
+node scripts/zalo/inspect-group-images.mjs <groupId>
+```
+
+Ảnh Zalo trong group: `content` là object; URL ưu tiên `href` / `oriUrl` / `normalUrl` (xem `serverless/shared/zalo-message.js`). Ảnh trong thread **Slack DM** vẫn được nhúng lúc 10h nếu đã có sẵn.
+
+Sau khi post, danh sách món lưu vào DynamoDB **`slack-dishes-dishes-menu`** (partition key `date` GMT+7).
 
 ## Đặt món & giá
 
@@ -64,7 +85,8 @@ Nguồn món: DM Slack của user trong SSM `menu-dm-user-id` (tin mới nhất 
 | Giá mặc định | 30.000đ | `serverless/shared/meal-constants.js` |
 | Giá upsize (`:up:`) | 35.000đ | cùng file |
 | Tối đa món trên menu | 20 | cùng file |
-| Tối đa món/user | 5 | cùng file |
+| Tối đa món/user (30k) | 4 | `serverless/shared/meal-constants.js` |
+| Tối đa món/user (35k, `:up:`) | 5 | cùng file |
 
 Ghi đè giá qua SSM: `orders-default-price`, `orders-upsize-price`.
 
@@ -102,6 +124,7 @@ Reaction theo index món (0-based trong code, hiển thị 1-based cho user):
 | Sự kiện | GMT+7 | Cron UTC (EventBridge) |
 |---------|-------|-------------------------|
 | PostMenu | 10:00 T2–T6 | `cron(0 3 ? * MON-FRI *)` |
+| ZaloMenuImages | Sau POST_MENU+5p → trước ZALO_SUMMARY, mỗi 10p | `cron(5/10 2-3 ? * MON-FRI *)` + gate trong Lambda |
 | ZaloSheetSummary | 11:00 T2–T6 | `cron(0 4 ? * MON-FRI *)` |
 | CollectOrders | Không schedule | Chỉ invoke từ Slack Events |
 
@@ -110,11 +133,14 @@ Hằng số trong `serverless/shared/time-constants.js`. Khóa ngày DynamoDB = 
 ## Folders
 
 - **`iac/`** – AWS SAM: DynamoDB, EventBridge, Lambdas, Function URL. Xem `iac/README.md`, `iac/config/parameter-store-keys.md`.
-- **`serverless/`** – Lambda source: **post-menu**, **collect-orders**, **zalo-sheet-summary**, **slack-events**, **sync-slack-ids**.
+- **`serverless/`** – Lambda source: **post-menu**, **zalo-menu-images**, **collect-orders**, **zalo-sheet-summary**, **slack-events**, **sync-slack-ids**.
 - **`serverless/shared/`** – logic dùng chung (`@slack-dishes/shared`):
   - `time-constants.js` — lịch, GMT+7, cutoff 11h
   - `meal-constants.js` — giá, max món, emoji, S62 default
   - `dynamo-dishes.js` — đọc/ghi bảng dishes menu
+  - `dynamo-menu.js` — metadata tin menu Slack + sync ảnh Zalo
+  - `menu-slack.js` — Block Kit menu, upload ảnh, `chat.update`
+  - `zalo-message.js` — parse tin ảnh Zalo (`chat.photo`, URL trong `content`)
   - `orders.js` — parse reactions, format Zalo, ghi sheet + S62
 
 ## Deploy
@@ -142,17 +168,17 @@ Trước lần chạy đầu: tạo SSM parameters dưới `/slack-dishes/` (xem
 | `RECONCILE_NOTIFY_SLACK_USER_ID` | `U02SJRNAM2M` | User được ping sau 11h khi có cập nhật đơn |
 | `MR_CHEF_SLACK_USER_ID` | (SSM) | User phải được @ trong reply để trigger CollectOrders |
 
-**Zalo:** SSM `zalo-group-id`, `zalo-cookies-json`, `zalo-imei`, `zalo-user-agent` + sheet keys (orders). Cần `bot-token`, `TABLE_NAME`, `DISHES_TABLE_NAME`.
+**Zalo:** SSM `zalo-group-id`, `zalo-cookies-json`, `zalo-imei`, `zalo-user-agent`, tùy chọn `zalo-menu-source-user-id` (bật poll ảnh menu), `zalo-menu-history-count` (mặc định 50). Bot cần scope `files:write` để upload ảnh. Cần `bot-token`, `TABLE_NAME`, `DISHES_TABLE_NAME`.
 
-**Test local Zalo/summary:** `node --env-file=.env scripts/zalo/send-sheet-summary-local.mjs` (cần `TABLE_NAME`, `DISHES_TABLE_NAME`, tùy chọn `ZALO_SUMMARY_CELL`).
+**Test local Zalo:** `node scripts/zalo/inspect-group-images.mjs <groupId>` — xem uid nhà bếp và URL ảnh. Summary: `node --env-file=.env scripts/zalo/send-sheet-summary-local.mjs`.
 
 ## AWS Free Tier
 
 | Resource | Free tier (12 tháng) | App này |
 |----------|----------------------|---------|
-| **Lambda** | 1M requests/tháng | ~2 schedule/ngày × ~22 ngày + slack-events khi reply |
+| **Lambda** | 1M requests/tháng | ~2 schedule/ngày + ~12 tick poll/ngày (phần lớn skip nếu menu 10h) + slack-events |
 | **DynamoDB** | 25 GB storage (always free); on-demand requests ~$0 ở quy mô này | Hai bảng, vài item/ngày |
-| **EventBridge** | 14M events/tháng | 2 rules × ~22 ngày ≈ 44 lần/tháng |
+| **EventBridge** | 14M events/tháng | ~3 rules × ~22 ngày (post, zalo summary, poll tick) |
 | **SSM** | Standard parameters | Config `/slack-dishes/` |
 
 Một Lambda Function URL (slack-events) public để Slack POST. Không server luôn bật.

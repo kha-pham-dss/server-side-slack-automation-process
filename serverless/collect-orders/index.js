@@ -1,5 +1,5 @@
 /**
- * CollectOrders Lambda — invoke từ Slack Events khi user @Mr.Chef dưới menu.
+ * CollectOrders Lambda — chỉ invoke từ Slack Events khi user @Mr.Chef trong thread menu hôm nay.
  * Đọc reactions, ghi đơn lên sheet + ô Zalo summary (S62), ping reconcile sau 11h GMT+7.
  */
 
@@ -14,6 +14,7 @@ import {
   syncOrdersToSheetAndSummary,
   DEFAULT_MEAL_PRICE,
   UPSIZE_MEAL_PRICE,
+  formatPriceLabel,
 } from '@slack-dishes/shared';
 import {
   CACHE_TTL_MS,
@@ -79,6 +80,11 @@ async function addReactionToMessage(botToken, channelId, messageTs, emojiName) {
 export async function handler(event) {
   console.log('CollectOrders invoked', JSON.stringify(event?.detail ?? event));
 
+  if (event?.triggeredBy !== 'slack_reply') {
+    console.log('CollectOrders: skipped — chỉ chạy khi user @Mr.Chef trong thread menu hôm nay');
+    return { ok: true, skipped: true, reason: 'not_slack_reply_trigger' };
+  }
+
   try {
     const config = await getConfig();
     const botToken = config['bot-token'];
@@ -120,24 +126,24 @@ export async function handler(event) {
 
     const { ordersByUserId, userIdToName, dishes, zaloCell, summaryText, cappedUserIds } = syncResult;
 
-    const triggeredBySlackReply = event?.triggeredBy === 'slack_reply';
     const afterZaloCutoff = event?.afterZaloCutoff === true || isAfterZaloSummaryCutoffNow();
     const triggeringUserId = event?.userId;
 
-    for (const { userId, dishCount } of cappedUserIds) {
+    for (const { userId, dishCount, price } of cappedUserIds) {
+      const priceLabel = formatPriceLabel(price, defaultPrice, upPrice);
       try {
         await postReplyInThread(
           botToken,
           channel_id,
           message_ts,
-          `<@${userId}> Bạn đang đặt ${dishCount} món, hệ thống chỉ ghi nhận tối đa 5 món đầu`
+          `<@${userId}> Bạn đang đặt ${dishCount} món / suất ${priceLabel}`
         );
       } catch (err) {
-        console.warn('Failed to ping capped-order user', userId, err);
+        console.warn('Failed to ping over-limit user', userId, err);
       }
     }
 
-    if (triggeredBySlackReply && event?.replyChannelId && event?.replyTs) {
+    if (event?.replyChannelId && event?.replyTs) {
       await addReactionToMessage(botToken, event.replyChannelId, event.replyTs, 'white_check_mark');
     }
 
@@ -159,7 +165,7 @@ export async function handler(event) {
           `${ping}Có cập nhật đặt món sau khi đã gửi Zalo (user chưa chọn món).`
         );
       }
-    } else if (triggeredBySlackReply && !afterZaloCutoff) {
+    } else {
       await postReplyInThread(botToken, channel_id, message_ts, 'Đã ghi nhận danh sách đặt món :bee-like:');
     }
 
