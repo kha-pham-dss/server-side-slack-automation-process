@@ -1,10 +1,10 @@
 /**
- * Zalo menu images Lambda — poll Zalo group, sync ảnh nhà bếp lên tin menu Slack.
+ * Menu images sync — poll Slack DM thread for menu photos, update channel menu, then stop.
  */
 
 import { loadConfigFromParameterStore } from '@slack-dishes/shared/ssm-config.js';
 import { CACHE_TTL_MS, isWithinZaloMenuImagePollWindow } from '@slack-dishes/shared/time-constants.js';
-import { runFromConfig } from './job.js';
+import { isTestMode, runFromConfig } from './job.js';
 
 /** @type {Record<string, string>} */
 let configCache = {};
@@ -20,11 +20,11 @@ async function getConfig() {
 }
 
 export async function handler(event) {
-  console.log('ZaloMenuImages invoked', JSON.stringify(event?.detail ?? event));
+  console.log('MenuImagesSync invoked', JSON.stringify(event?.detail ?? event));
 
   const fromSchedule = event?.source === 'aws.events';
-  if (fromSchedule && !isWithinZaloMenuImagePollWindow()) {
-    console.log('ZaloMenuImages: outside poll window (post menu → Zalo summary), skip');
+  if (fromSchedule && !isTestMode() && !isWithinZaloMenuImagePollWindow()) {
+    console.log('MenuImagesSync: outside poll window (post menu → Zalo summary), skip');
     return { ok: true, skipped: true, reason: 'outside_poll_window' };
   }
 
@@ -33,7 +33,7 @@ export async function handler(event) {
     const result = await runFromConfig(config);
     return { ok: true, ...result };
   } catch (err) {
-    console.error('ZaloMenuImages error:', err);
+    console.error('MenuImagesSync error:', err);
     throw err;
   }
 }

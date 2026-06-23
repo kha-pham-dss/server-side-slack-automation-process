@@ -1,8 +1,8 @@
 /**
  * PostMenu Lambda (10:00 GMT+7 Mon–Fri).
- * Fetches dishes from latest message in DM with menu source user (every non-empty line = dish name),
- * images from thread replies under that DM message (or later via Zalo group poll),
- * posts menu to Slack channel, stores message_ts + dish list in DynamoDB.
+ * Fetches dishes from latest message in DM with menu source user,
+ * posts menu to Slack channel (ảnh có thể thêm sau qua menu-images-sync),
+ * stores message_ts + dish list + DM thread ref in DynamoDB.
  * On DM "Bỏ qua hôm nay": no Slack post, no DynamoDB rows.
  */
 
@@ -15,8 +15,12 @@ import { DISH_EMOJI_NAMES, MAX_DISHES } from '@slack-dishes/shared/meal-constant
 import {
   buildMenuSlackBlocks,
   buildMenuSlackTextFallback,
-  menuBlocksNeedBotToken,
 } from '@slack-dishes/shared/menu-slack.js';
+import {
+  fetchImageFileIdsFromDmThread,
+  fetchLatestMenuDmSource,
+  MENU_DM_USER_ID_DEFAULT,
+} from '@slack-dishes/shared/menu-dm.js';
 
 const dynamo = new DynamoDBClient();
 
@@ -36,101 +40,11 @@ async function getConfig() {
   return configCache;
 }
 
-const MENU_DM_USER_ID_DEFAULT = 'U02SJRNAM2M';
-
-/** Nội dung DM đúng chuỗi này → không đăng menu, không ghi DynamoDB. */
-const SKIP_TODAY_DM_TEXT = 'Bỏ qua hôm nay';
-
-/**
- * Image file IDs from thread replies under the menu DM message (not the parent message itself).
- * @param {string} botToken
- * @param {string} dmChannelId
- * @param {string} parentTs
- * @returns {Promise<string[]>}
- */
-async function fetchImageFileIdsFromDmThread(botToken, dmChannelId, parentTs) {
-  const res = await fetch(
-    `https://slack.com/api/conversations.replies?channel=${encodeURIComponent(dmChannelId)}&ts=${encodeURIComponent(parentTs)}&limit=100`,
-    { headers: { Authorization: `Bearer ${botToken}` } }
-  );
-  const data = await res.json();
-  if (!data.ok) {
-    console.warn('PostMenu: conversations.replies failed', data.error);
-    return [];
-  }
-
-  const fileIds = [];
-  for (const msg of (data.messages || []).slice(1)) {
-    for (const f of msg.files || []) {
-      if (f.mimetype?.startsWith('image/') && f.id) fileIds.push(f.id);
-    }
-  }
-  return fileIds;
-}
-
-/**
- * Get latest message from DM with the given user and parse dishes + thread images.
- * @returns {{ dishes: { id: string, name: string }[], imageFileIds: string[] } | null}
- */
-async function fetchDishesFromSlackDM(botToken, userId) {
-  const openRes = await fetch('https://slack.com/api/conversations.open', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json; charset=utf-8',
-      Authorization: `Bearer ${botToken}`,
-    },
-    body: JSON.stringify({ users: userId }),
-  });
-  const openData = await openRes.json();
-  if (!openData.ok) throw new Error(`Slack conversations.open error: ${openData.error ?? openRes.status}`);
-  const channelId = openData.channel?.id;
-  if (!channelId) throw new Error('Slack conversations.open did not return channel id');
-
-  const histRes = await fetch(
-    `https://slack.com/api/conversations.history?channel=${encodeURIComponent(channelId)}&limit=1`,
-    { headers: { Authorization: `Bearer ${botToken}` } }
-  );
-  const histData = await histRes.json();
-  if (!histData.ok) throw new Error(`Slack conversations.history error: ${histData.error ?? histRes.status}`);
-  const messages = histData.messages || [];
-  const latest = messages[0];
-  if (!latest?.text) throw new Error('No message or empty text in DM with menu source user');
-
-  if (latest.text.trim() === SKIP_TODAY_DM_TEXT) {
-    return null;
-  }
-
-  const lines = latest.text.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
-  const imageFileIds = await fetchImageFileIdsFromDmThread(botToken, channelId, latest.ts);
-  return {
-    dishes: lines.map((name, i) => ({ id: String(i), name })),
-    imageFileIds,
-  };
-}
-
-async function postToSlack(config, blocks, text, forceBotPost = false) {
-  const webhookUrl = config['webhook-url'];
+async function postToSlack(config, blocks, text) {
   const channelId = config['channel-id'];
   const botToken = config['bot-token'];
+  if (!botToken) throw new Error('Missing bot-token (required for menu post + later image update)');
 
-  const body = { blocks, text };
-  const useBot = forceBotPost || menuBlocksNeedBotToken(blocks);
-
-  if (webhookUrl && webhookUrl.trim() && !useBot) {
-    const res = await fetch(webhookUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    if (!res.ok) throw new Error(`Slack webhook error: ${res.status} ${await res.text()}`);
-    const data = await res.json();
-    return {
-      channel_id: data.channel ?? channelId,
-      message_ts: data.ts ?? data.message?.ts ?? String(Date.now() / 1000),
-    };
-  }
-
-  if (!botToken) throw new Error('Missing bot-token and webhook-url in config');
   const res = await fetch('https://slack.com/api/chat.postMessage', {
     method: 'POST',
     headers: {
@@ -139,8 +53,8 @@ async function postToSlack(config, blocks, text, forceBotPost = false) {
     },
     body: JSON.stringify({
       channel: channelId,
-      blocks: body.blocks,
-      text: body.text,
+      blocks,
+      text,
     }),
   });
   const data = await res.json();
@@ -185,37 +99,37 @@ export async function handler(event) {
     if (!TABLE_NAME) throw new Error('TABLE_NAME not set');
 
     const menuDmUserId = config['menu-dm-user-id'] || MENU_DM_USER_ID_DEFAULT;
-    const zaloImageSyncEnabled = !!(config['zalo-menu-source-user-id'] || '').trim();
-
-    const menuSource = await fetchDishesFromSlackDM(botToken, menuDmUserId);
-    if (menuSource === null) {
-      console.log(
-        'PostMenu: DM is "%s"; skipping channel post and DynamoDB (collect-orders / Zalo will skip)',
-        SKIP_TODAY_DM_TEXT
-      );
+    const dmSource = await fetchLatestMenuDmSource(botToken, menuDmUserId);
+    if (dmSource === null) {
+      console.log('PostMenu: DM is skip text; no channel post or DynamoDB');
       return { ok: true, skipped: true, reason: 'skip_today_dm' };
     }
 
-    const { dishes, imageFileIds } = menuSource;
+    const { channelId: dmChannelId, parentTs: dmParentTs, dishes } = dmSource;
     if (!dishes.length) throw new Error('No dishes parsed from latest DM message');
 
+    const imageFileIds = await fetchImageFileIdsFromDmThread(botToken, dmChannelId, dmParentTs);
     const blocks = buildMenuSlackBlocks(dishes, imageFileIds);
     const text = buildMenuSlackTextFallback(dishes);
     const shownCount = Math.min(dishes.length, MAX_DISHES);
 
     if (imageFileIds.length) {
       console.log('PostMenu: embedding', imageFileIds.length, 'image(s) from DM thread');
-    } else if (zaloImageSyncEnabled) {
-      console.log('PostMenu: no DM images yet; Zalo group poll will update menu later');
+    } else {
+      console.log('PostMenu: no DM images yet; menu-images-sync will poll thread');
     }
 
-    const { channel_id, message_ts } = await postToSlack(config, blocks, text, zaloImageSyncEnabled);
+    const { channel_id, message_ts } = await postToSlack(config, blocks, text);
 
     await putDishesMenuForDate(dynamo, DISHES_TABLE_NAME, dishes);
     await putMenuMessageForDate(dynamo, TABLE_NAME, {
       channelId: channel_id,
       messageTs: message_ts,
       dishCount: shownCount,
+      menuDmChannelId: dmChannelId,
+      menuDmParentTs: dmParentTs,
+      slackImageFileIds: imageFileIds,
+      imagesSyncComplete: imageFileIds.length > 0,
     });
 
     if (botToken) {
@@ -223,24 +137,14 @@ export async function handler(event) {
       await addReactionsToMessage(botToken, channel_id, message_ts, reactionNames);
     }
 
-    console.log(
-      'Posted menu to channel',
-      channel_id,
-      'message_ts',
-      message_ts,
-      'dishes saved to DynamoDB',
-      'images',
-      imageFileIds.length,
-      'zalo_poll',
-      zaloImageSyncEnabled
-    );
+    console.log('Posted menu', channel_id, message_ts, 'images', imageFileIds.length);
     return {
       ok: true,
       channel_id,
       message_ts,
       dish_count: shownCount,
       image_count: imageFileIds.length,
-      zalo_image_poll: zaloImageSyncEnabled,
+      images_sync_complete: imageFileIds.length > 0,
     };
   } catch (err) {
     console.error('PostMenu error:', err);

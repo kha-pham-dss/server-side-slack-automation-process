@@ -17,7 +17,7 @@ AWS SAM template for **Option A**: scheduled Lambdas (PostMenu, **Zalo sheet sum
    npm install --prefix serverless/collect-orders
    npm install --prefix serverless/slack-events
    npm install --prefix serverless/zalo-sheet-summary
-   npm install --prefix serverless/zalo-menu-images
+   npm install --prefix serverless/menu-images-sync
    npm install --prefix serverless/sync-slack-ids
    ```
 3. Build and deploy:
@@ -31,8 +31,8 @@ AWS SAM template for **Option A**: scheduled Lambdas (PostMenu, **Zalo sheet sum
 ## Resources
 
 - **DynamoDB:** `slack-dishes-menu-message` (partition key: `date` = YYYY-MM-DD)
-- **Lambdas:** `slack-dishes-post-menu`, `slack-dishes-zalo-menu-images`, `slack-dishes-collect-orders`, `slack-dishes-sync-slack-ids` (manual: fill Slack user ID column on sheet), `slack-dishes-zalo-sheet-summary`, optional `slack-dishes-slack-events` (Function URL)
-- **EventBridge:** `post-menu-daily`, `zalo-menu-images-poll` (mỗi 10 phút UTC 2–3h; cửa sổ GMT+7 trong Lambda), `zalo-sheet-summary-daily`.
+- **Lambdas:** `slack-dishes-post-menu`, `slack-dishes-menu-images-sync`, `slack-dishes-collect-orders`, `slack-dishes-sync-slack-ids` (manual: fill Slack user ID column on sheet), `slack-dishes-zalo-sheet-summary`, optional `slack-dishes-slack-events` (Function URL)
+- **EventBridge:** `post-menu-daily`, `menu-images-sync-poll` (mỗi 10 phút UTC 2–3h; cửa sổ GMT+7 trong Lambda), `zalo-sheet-summary-daily`.
 
 ## Timezone
 

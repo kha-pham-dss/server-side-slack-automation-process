@@ -1,8 +1,8 @@
 # Serverless – Slack dishes ordering
 Lambda functions for the Slack dishes flow:
 
-- **post-menu** – Runs at **10:00 GMT+7** (Mon–Fri). Reads latest DM with menu source user (mỗi dòng = một món), posts menu text to Slack channel, stores `message_ts` in DynamoDB. DM `Bỏ qua hôm nay` → skip. Nếu có `zalo-menu-source-user-id`, post qua bot (để update ảnh sau).
-- **zalo-menu-images** – Poll Zalo group mỗi 10 phút trong cửa sổ **POST_MENU → ZALO_SUMMARY** (gate trong code). Upload ảnh mới nhất nhà bếp lên tin menu Slack.
+- **post-menu** – Runs at **10:00 GMT+7** (Mon–Fri). Reads latest DM with menu source user (mỗi dòng = một món), posts menu to Slack channel (bot token), stores `message_ts` + DM thread ref in DynamoDB. DM `Bỏ qua hôm nay` → skip. Ảnh trong thread DM lúc 10h được nhúng ngay; nếu chưa có ảnh, **menu-images-sync** poll sau.
+- **menu-images-sync** – Poll thread DM menu mỗi 10 phút trong cửa sổ **POST_MENU → ZALO_SUMMARY**. Khi có ảnh → `chat.update` tin menu channel → `images_sync_complete` → dừng poll trong ngày.
 - **collect-orders** – Chỉ invoke từ **slack-events** khi user reply trong thread menu hôm nay và @Mr.Chef. Đọc `reactions.get`, ghi sheet + S62. Suất 30k: tối đa 4 món; suất 35k (`:up:`): tối đa 5 món — vượt giới hạn thì ping ngắn trong thread (vd. `6 món / suất 30k`). Trước 11h: reply "Đã ghi nhận…" + :white_check_mark: trên tin @Mr.Chef; sau 11h: ping reconcile kèm đơn user.
 - **sync-slack-ids** – **Invoke thủ công** (không schedule). Đọc tên từ `orders-user-range`, khớp `users.list`, ghi Slack `U…` vào cột ID (mặc định `BZ15:BZ100`). Chạy sau khi thêm user mới hoặc trước khi bật khớp theo ID. Shared helpers: `serverless/shared` (`@slack-dishes/shared`).
 - **slack-events** – HTTP endpoint (Lambda Function URL). **Control channel:** tin `POST: …` → gửi thẳng vào `channel-id` (inline, log `control-channel-post: sent`). Reply dưới menu + @Mr.Chef → collect-orders.
@@ -23,7 +23,7 @@ cd collect-orders && npm install && cd ..
 cd slack-events && npm install && cd ..
 cd control-channel-post && npm install && cd ..
 cd zalo-sheet-summary && npm install && cd ..
-cd zalo-menu-images && npm install && cd ..
+cd menu-images-sync && npm install && cd ..
 cd sync-slack-ids && npm install && cd ..
 ```
 
@@ -35,7 +35,7 @@ npm install --prefix serverless/collect-orders
 npm install --prefix serverless/slack-events
 npm install --prefix serverless/control-channel-post
 npm install --prefix serverless/zalo-sheet-summary
-npm install --prefix serverless/zalo-menu-images
+npm install --prefix serverless/menu-images-sync
 npm install --prefix serverless/sync-slack-ids
 node serverless/collect-orders/vendor-shared.mjs   # sau npm install local (SAM Makefile tự copy khi deploy)
 node serverless/sync-slack-ids/vendor-shared.mjs

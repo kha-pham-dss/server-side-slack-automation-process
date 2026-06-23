@@ -79,9 +79,16 @@ export { getDishesMenuForDate, putDishesMenuForDate } from './dynamo-dishes.js';
 export {
   getMenuMessageForDate,
   putMenuMessageForDate,
-  patchMenuMessageSyncState,
-  setMenuLatestImageSyncState,
+  setMenuImagesSynced,
 } from './dynamo-menu.js';
+
+export {
+  SKIP_TODAY_DM_TEXT,
+  MENU_DM_USER_ID_DEFAULT,
+  openDmChannelWithUser,
+  fetchImageFileIdsFromDmThread,
+  fetchLatestMenuDmSource,
+} from './menu-dm.js';
 
 export {
   buildMenuSlackBlocks,
