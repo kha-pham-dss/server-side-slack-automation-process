@@ -1,5 +1,5 @@
 /**
- * PostMenu Lambda (10:00 GMT+7 Mon–Fri).
+ * PostMenu Lambda (9:30 GMT+7 Mon–Fri).
  * Fetches dishes from latest message in DM with menu source user,
  * posts menu to Slack channel (ảnh có thể thêm sau qua menu-images-sync),
  * stores message_ts + dish list + DM thread ref in DynamoDB.

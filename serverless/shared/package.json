@@ -13,6 +13,7 @@
     "./dynamo-menu.js": "./dynamo-menu.js",
     "./menu-slack.js": "./menu-slack.js",
     "./menu-dm.js": "./menu-dm.js",
+    "./text-transforms.js": "./text-transforms.js",
     "./zalo-message.js": "./zalo-message.js",
     "./ssm-config.js": "./ssm-config.js",
     "./post-command.js": "./post-command.js",

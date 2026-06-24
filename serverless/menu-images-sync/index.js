@@ -20,7 +20,8 @@ async function getConfig() {
 }
 
 export async function handler(event) {
-  console.log('MenuImagesSync invoked', JSON.stringify(event?.detail ?? event));
+  const triggeredBy = event?.triggeredBy ?? event?.detail?.triggeredBy;
+  console.log('MenuImagesSync invoked', JSON.stringify({ triggeredBy, source: event?.source }));
 
   const fromSchedule = event?.source === 'aws.events';
   if (fromSchedule && !isTestMode() && !isWithinZaloMenuImagePollWindow()) {

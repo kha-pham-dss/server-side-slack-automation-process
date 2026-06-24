@@ -8,9 +8,9 @@ export const GMT7_OFFSET_MS = 7 * 60 * 60 * 1000;
 /** TTL cache config / token SSM (ms). */
 export const CACHE_TTL_MS = 60_000;
 
-/** Mon–Fri 10:00 GMT+7 — EventBridge: cron(0 3 ? * MON-FRI *) */
-export const POST_MENU_HOUR_GMT7 = 10;
-export const POST_MENU_MINUTE_GMT7 = 0;
+/** Mon–Fri 9:30 GMT+7 — EventBridge: cron(30 2 ? * MON-FRI *) */
+export const POST_MENU_HOUR_GMT7 = 9;
+export const POST_MENU_MINUTE_GMT7 = 30;
 
 /** Mon–Fri 11:00 GMT+7 — EventBridge: cron(0 4 ? * MON-FRI *) */
 export const ZALO_SUMMARY_HOUR_GMT7 = 11;

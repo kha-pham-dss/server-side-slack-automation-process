@@ -50,7 +50,7 @@ Resources:
       FunctionName: slack-dishes-post-menu
       CodeUri: ../serverless/post-menu
       Handler: index.handler
-      Description: Runs at 10:00 GMT+7 (VNT); reads menu from DM, posts to Slack, stores message_ts + dish list in DynamoDB.
+      Description: Runs at 9:30 GMT+7 (VNT); reads menu from DM, posts to Slack, stores message_ts + dish list in DynamoDB.
       Environment:
         Variables:
           TABLE_NAME: !Ref MenuMessageTable
@@ -78,9 +78,9 @@ Resources:
         PostMenuSchedule:
           Type: Schedule
           Properties:
-            Schedule: cron(0 3 ? * MON-FRI *)
+            Schedule: cron(30 2 ? * MON-FRI *)
             Name: post-menu-daily
-            Description: Invoke PostMenu at 10:00 GMT+7 (VNT)
+            Description: Invoke PostMenu at 9:30 GMT+7 (VNT)
             Enabled: true
 
   SyncSlackIdsFunction:
@@ -255,11 +255,12 @@ Resources:
       FunctionName: slack-dishes-slack-events
       CodeUri: ../serverless/slack-events
       Handler: index.handler
-      Description: 'Slack Events API; control channel POST → ControlChannelPost; menu @Mr.Chef → CollectOrders.'
+      Description: 'Slack Events API; DM menu image → MenuImagesSync; control POST; menu @Mr.Chef → CollectOrders.'
       Environment:
         Variables:
           TABLE_NAME: !Ref MenuMessageTable
           COLLECT_ORDERS_FUNCTION_NAME: !Ref CollectOrdersFunction
+          MENU_IMAGES_SYNC_FUNCTION_NAME: !Ref MenuImagesSyncFunction
           PARAMETER_PREFIX: /slack-dishes
           # Slack user id (e.g. U01ABC…) for Mr.Chef; menu-thread replies must @-mention this user to trigger CollectOrders. Override SSM /slack-dishes/mr-chef-user-id when non-empty.
           MR_CHEF_SLACK_USER_ID: ''
@@ -283,7 +284,9 @@ Resources:
             - Effect: Allow
               Action:
                 - lambda:InvokeFunction
-              Resource: !GetAtt CollectOrdersFunction.Arn
+              Resource:
+                - !GetAtt CollectOrdersFunction.Arn
+                - !GetAtt MenuImagesSyncFunction.Arn
       FunctionUrlConfig:
         AuthType: NONE
         Cors:

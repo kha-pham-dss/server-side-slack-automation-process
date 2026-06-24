@@ -1,13 +1,13 @@
 # server-side-slack-automation-process
 
-Server-side Slack dishes ordering (vendor mới): đăng thực đơn lúc **10:00 GMT+7**, user react chọn món (tối đa **5 món/người**), lúc **11:00 GMT+7** tổng hợp đơn từ Slack reactions → ghi Google Sheet + ô **S62** → gửi Zalo nhóm. Tùy chọn: Slack Events API để **reply dưới menu + @Mr.Chef** cập nhật lại đơn (sau 11h: cập nhật sheet, ping reconcile, không gửi lại Zalo). Tất cả ngày/giờ dùng **GMT+7**.
+Server-side Slack dishes ordering (vendor mới): đăng thực đơn lúc **9:30 GMT+7**, user react chọn món (tối đa **5 món/người**), lúc **11:00 GMT+7** tổng hợp đơn từ Slack reactions → ghi Google Sheet + ô **S62** → gửi Zalo nhóm. Tùy chọn: Slack Events API để **reply dưới menu + @Mr.Chef** cập nhật lại đơn (sau 11h: cập nhật sheet, ping reconcile, không gửi lại Zalo). Tất cả ngày/giờ dùng **GMT+7**.
 
 ## Workflow
 
 Timeline (T2–T6):
 
 ```
-  10:00 GMT+7
+  9:30 GMT+7
   ─────────────
   EventBridge ──────► PostMenu Lambda
                             │
@@ -19,11 +19,12 @@ Timeline (T2–T6):
                                     menu_dm_channel_id, menu_dm_parent_ts, images_sync_complete, …)
                                   • slack-dishes-dishes-menu   (danh sách món theo ngày)
 
-  Sau POST_MENU → trước ZALO_SUMMARY (mỗi 10 phút)
+  Sau POST_MENU → trước ZALO_SUMMARY
   ─────────────
-  EventBridge ──────► MenuImagesSync Lambda
+  Ảnh reply thread DM menu ──► SlackEvents (message.im) ──► MenuImagesSync Lambda
+  (fallback mỗi 10 phút) EventBridge ──► MenuImagesSync Lambda
                             │
-                            ├──► Slack DM thread  (ảnh reply dưới tin menu DM)
+                            ├──► Slack DM thread  (conversations.replies)
                             ├──► Slack channel    (chat.update tin menu khi có ảnh)
                             └──► DynamoDB         (images_sync_complete → dừng poll)
 
@@ -53,7 +54,7 @@ Timeline (T2–T6):
                                                         — không gửi lại Zalo
 ```
 
-**Tóm tắt:** 10h đăng menu → user react (30k ≤4 món, `:up:` = 35k ≤5 món) → 11h Zalo lambda tổng hợp từ reactions, ghi sheet + S62, gửi Zalo (nếu bật). **CollectOrders** chỉ chạy khi reply @Mr.Chef trong thread menu; sau 11h cập nhật sheet + ping reconcile.
+**Tóm tắt:** 9h30 đăng menu → user react (30k ≤4 món, `:up:` = 35k ≤5 món) → 11h Zalo lambda tổng hợp từ reactions, ghi sheet + S62, gửi Zalo (nếu bật). **CollectOrders** chỉ chạy khi reply @Mr.Chef trong thread menu; sau 11h cập nhật sheet + ping reconcile.
 
 ## PostMenu — tin Slack
 
@@ -67,14 +68,14 @@ Cấu trúc message (Block Kit):
 
 ### Nguồn menu & ảnh (Slack DM)
 
-1. **Trước 10h** — forward text menu từ Zalo → **Slack DM** với bot (`menu-dm-user-id`). Mỗi dòng không rỗng = một món.
-2. **10h** — PostMenu đọc tin DM mới nhất, post menu **text** lên channel (bot token bắt buộc). Lưu `menu_dm_channel_id` + `menu_dm_parent_ts` vào DynamoDB.
-3. **Sau 10h** — gửi ảnh **reply trong thread** dưới tin menu DM đó (không phải tin DM mới).
-4. **MenuImagesSync** poll mỗi **10 phút** (cửa sổ `POST_MENU+5p` → trước `ZALO_SUMMARY`, xem `time-constants.js`). Khi có ảnh hợp lệ → `chat.update` tin menu channel → `images_sync_complete=true` → các lần poll sau trong ngày bỏ qua.
+1. **Trước 9h30** — forward text menu từ Zalo → **Slack DM** với bot (`menu-dm-user-id`). Mỗi dòng không rỗng = một món.
+2. **9h30** — PostMenu đọc tin DM mới nhất, post menu **text** lên channel (bot token bắt buộc). Lưu `menu_dm_channel_id` + `menu_dm_parent_ts` vào DynamoDB.
+3. **Sau 9h30** — gửi ảnh **reply trong thread** dưới tin menu DM đó (không phải tin DM mới).
+4. **MenuImagesSync** chạy **ngay** khi Slack gửi event `message.im` (ảnh mới trong thread) → `chat.update` tin menu channel → `images_sync_complete=true`. **Fallback:** EventBridge poll mỗi **10 phút** trong cửa sổ `POST_MENU+5p` → trước `ZALO_SUMMARY` nếu event bị miss.
 
 DM `Bỏ qua hôm nay` → không post Slack, không ghi DynamoDB (Zalo 11h / CollectOrders cũng skip).
 
-Nếu ảnh đã có trong thread DM lúc 10h → PostMenu nhúng luôn và đánh dấu `images_sync_complete` (không cần poll).
+Nếu ảnh đã có trong thread DM lúc 9h30 → PostMenu nhúng luôn và đánh dấu `images_sync_complete` (không cần poll).
 
 Sau khi post, danh sách món lưu vào DynamoDB **`slack-dishes-dishes-menu`** (partition key `date` GMT+7).
 
@@ -125,14 +126,14 @@ Reaction theo index món (0-based trong code, hiển thị 1-based cho user):
 
 | Sự kiện | GMT+7 | Cron UTC (EventBridge) |
 |---------|-------|-------------------------|
-| PostMenu | 10:00 T2–T6 | `cron(0 3 ? * MON-FRI *)` |
-| MenuImagesSync | Sau POST_MENU+5p → trước ZALO_SUMMARY, mỗi 10p | `cron(5/10 2-3 ? * MON-FRI *)` + gate trong Lambda |
+| PostMenu | 9:30 T2–T6 | `cron(30 2 ? * MON-FRI *)` |
+| MenuImagesSync | Event `message.im` + fallback mỗi 10p (POST_MENU+5p → ZALO_SUMMARY) | `cron(5/10 2-3 ? * MON-FRI *)` + gate trong Lambda |
 | ZaloSheetSummary | 11:00 T2–T6 | `cron(0 4 ? * MON-FRI *)` |
 | CollectOrders | Không schedule | Chỉ invoke từ Slack Events |
 
 Hằng số trong `serverless/shared/time-constants.js`. Khóa ngày DynamoDB = **YYYY-MM-DD theo GMT+7**.
 
-Menu 10h → poll ảnh ~10:05–10:55. Đổi giờ menu (vd. 9h): sửa `POST_MENU_HOUR_GMT7` + cron PostMenu trong `iac/template.yaml`; mở rộng giờ UTC trong cron `menu-images-sync-poll` nếu menu &lt; 9h.
+Menu 9h30 → poll ảnh ~9:35–10:55. Đổi giờ menu: sửa `POST_MENU_HOUR_GMT7` / `POST_MENU_MINUTE_GMT7` + cron PostMenu trong `iac/template.yaml`.
 
 ## Folders
 
@@ -171,7 +172,7 @@ Tạo SSM parameters dưới `/slack-dishes/` (xem `iac/config/parameter-store-k
 
 1. Thêm `/slack-dishes/signing-secret`
 2. Slack app → Event Subscriptions → Request URL = **SlackEventsFunctionUrl** (output sau deploy)
-3. Subscribe **message.channels** (+ **message.groups** nếu kênh private)
+3. Subscribe **message.im** (ảnh thread DM menu), **message.channels** (+ **message.groups** nếu kênh private)
 
 **Env Lambda (SAM `template.yaml`):**
 

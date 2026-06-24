@@ -2,7 +2,8 @@
  * Slack Events API endpoint (Lambda Function URL).
  * - url_verification: return challenge.
  * - Control channel: `POST: …` → gửi vào channel-id (chạy inline).
- * - Reply trong thread menu hôm nay + @Mr.Chef → CollectOrders (bắt buộc `thread_ts`).
+ * - DM thread menu + ảnh mới → MenuImagesSync (message.im).
+ * - Reply trong thread menu channel hôm nay + @Mr.Chef → CollectOrders (bắt buộc `thread_ts`).
  * - Cùng luồng đó nhưng sau 11:00 GMT+7 → collect-orders cập nhật sheet + ping RECONCILE_NOTIFY_SLACK_USER_ID kèm món user đặt.
  */
 
@@ -16,7 +17,14 @@ import {
   SLACK_SIGNATURE_MAX_AGE_SEC,
   dateKeyGmt7,
   isAfterZaloSummaryCutoffNow,
+  isWithinZaloMenuImagePollWindow,
 } from '@slack-dishes/shared/time-constants.js';
+import {
+  isReplyUnderMenuDmThread,
+  isSlackImMessage,
+  normalizeSlackTs,
+  slackMessageHasImageFiles,
+} from '@slack-dishes/shared/menu-dm.js';
 import { isPostCommand, slackEventMessageText } from '@slack-dishes/shared/post-command.js';
 import { runControlChannelPost } from '@slack-dishes/shared/control-channel-post-job.js';
 
@@ -26,6 +34,7 @@ const ssm = new SSMClient();
 
 const TABLE_NAME = process.env.TABLE_NAME;
 const COLLECT_ORDERS_FUNCTION_NAME = process.env.COLLECT_ORDERS_FUNCTION_NAME;
+const MENU_IMAGES_SYNC_FUNCTION_NAME = process.env.MENU_IMAGES_SYNC_FUNCTION_NAME;
 const PARAMETER_PREFIX = process.env.PARAMETER_PREFIX || '/slack-dishes';
 
 /** message subtypes bỏ qua (không phải tin user gõ POST:). */
@@ -121,12 +130,6 @@ function dateKey() {
   return dateKeyGmt7();
 }
 
-function normalizeSlackTs(ts) {
-  if (ts == null || ts === '') return '';
-  const n = parseFloat(String(ts));
-  return Number.isFinite(n) ? n.toFixed(6) : String(ts).trim();
-}
-
 function isReplyUnderTodayMenu(channel, threadTs, menu) {
   if (!menu) return false;
   if (String(channel || '').trim() !== String(menu.channel_id || '').trim()) return false;
@@ -185,6 +188,23 @@ async function invokeCollectOrders(replyChannelId, replyTs, userId, afterZaloCut
   );
 }
 
+async function invokeMenuImagesSync(dmChannelId, threadTs, messageTs, userId) {
+  const payload = JSON.stringify({
+    triggeredBy: 'slack_dm_image',
+    dmChannelId,
+    threadTs,
+    messageTs,
+    userId,
+  });
+  await lambda.send(
+    new InvokeCommand({
+      FunctionName: MENU_IMAGES_SYNC_FUNCTION_NAME,
+      InvocationType: 'Event',
+      Payload: payload,
+    })
+  );
+}
+
 export async function handler(event) {
   const rawBody =
     typeof event.body === 'string'
@@ -231,11 +251,38 @@ export async function handler(event) {
 
   const threadTs = ev.thread_ts || ev.ts;
   const channel = ev.channel;
+  const channelType = ev.channel_type;
   const replyTs = ev.ts;
   const messageText = slackEventMessageText(ev);
+  const inThread = !!ev.thread_ts;
+  const menu = await getTodayMenuMessage();
+
+  if (
+    MENU_IMAGES_SYNC_FUNCTION_NAME &&
+    inThread &&
+    slackMessageHasImageFiles(ev) &&
+    isSlackImMessage(channel, channelType) &&
+    menu &&
+    !menu.images_sync_complete &&
+    isReplyUnderMenuDmThread(channel, threadTs, menu) &&
+    isWithinZaloMenuImagePollWindow()
+  ) {
+    console.log('slack-events: DM menu thread image → MenuImagesSync', {
+      channel,
+      threadTs,
+      messageTs: ev.ts,
+      userId: ev.user,
+    });
+    try {
+      await invokeMenuImagesSync(channel, threadTs, ev.ts, ev.user);
+    } catch (err) {
+      console.error('slack-events: MenuImagesSync invoke failed', err?.message || err);
+    }
+    return { statusCode: 200, body: '' };
+  }
+
   const controlChannelId = await getControlChannelId();
   const postCmd = isPostCommand(messageText);
-  const inThread = !!ev.thread_ts;
 
   if (controlChannelId && channel === controlChannelId) {
     console.log('slack-events: control channel message', {
@@ -277,7 +324,6 @@ export async function handler(event) {
     return { statusCode: 200, body: '' };
   }
 
-  const menu = await getTodayMenuMessage();
   if (!isReplyUnderTodayMenu(channel, threadTs, menu) || !inThread) {
     return { statusCode: 200, body: '' };
   }

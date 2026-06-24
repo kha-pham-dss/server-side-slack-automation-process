@@ -13,6 +13,12 @@ export {
   getDishesSheetNameForCurrentMonth,
 } from './sheet-slack.js';
 
+export {
+  normalizeMenuDishName,
+  normalizeSlackDisplayName,
+  addSlackNameMatchKeys,
+} from './text-transforms.js';
+
 export { loadConfigFromParameterStore } from './ssm-config.js';
 
 export { getSheetsClient } from './sheets.js';
@@ -88,6 +94,10 @@ export {
   openDmChannelWithUser,
   fetchImageFileIdsFromDmThread,
   fetchLatestMenuDmSource,
+  normalizeSlackTs,
+  isSlackImMessage,
+  isReplyUnderMenuDmThread,
+  slackMessageHasImageFiles,
 } from './menu-dm.js';
 
 export {
