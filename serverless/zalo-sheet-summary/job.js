@@ -15,7 +15,7 @@ import {
 } from '@slack-dishes/shared';
 
 /** Ngày đầu vendor mới: manual gửi Zalo; set false sau khi ổn định. */
-const ZALO_SEND_DISABLED = true;
+const ZALO_SEND_DISABLED = false;
 
 const NO_ORDERS_MSG = 'Nay bọn em không đặt gì anh nhé';
 

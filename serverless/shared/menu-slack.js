@@ -36,6 +36,18 @@ export function buildMenuSlackBlocks(dishes, imageFileIds = []) {
       type: 'section',
       text: { type: 'mrkdwn', text: ':up: để upsize lên 35k' },
     },
+    { type: 'divider' },
+    {
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: [
+          'Nếu muốn sửa *số lượng món* (sau khi react): reply thread @Mr.Chef',
+          '• `2x chả cá` => 2 phần chả cá',
+          '• `2x chả cá, 2x thịt kho` => 2 phần chả cá + 2 phần thịt kho',
+        ].join('\n'),
+      },
+    },
   ];
 
   if (imageFileIds.length) {
@@ -58,7 +70,7 @@ export function buildMenuSlackTextFallback(dishes) {
     .slice(0, MAX_DISHES)
     .map((d) => (typeof d === 'object' && d?.name ? d.name : d))
     .join(', ');
-  return `Thực đơn hôm nay: ${names} — :up: để upsize lên 35k`;
+  return `Thực đơn hôm nay: ${names} — :up: upsize 35k — @Mr.Chef 2x tên món nếu cần 2+ phần`;
 }
 
 export function menuBlocksNeedBotToken(blocks) {

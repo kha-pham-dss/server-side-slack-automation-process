@@ -66,7 +66,6 @@ export {
   buildOrdersByUserId,
   formatDishNumbers,
   formatDishNames,
-  formatDishNamesWithQtyOverrides,
   formatOrderLine,
   buildZaloSummaryText,
   parseReactionsFromSlackMessage,

@@ -4,7 +4,15 @@
 
 import { normalizeMenuDishName } from './text-transforms.js';
 
-const QTY_OVERRIDE_RE = /(?:^|[\s,;]+)([2-5])x\s+([^,;]+?)(?=(?:[\s,;]+[2-5]x)|$)/gi;
+const QTY_OVERRIDE_RE = /(?:^|[\s,;]+)([2-5])x\s+([^,;]+?)(?=(?:\s+và\s+[2-5]x|[\s,;]+[2-5]x)|$)/gi;
+
+/** Bỏ hậu tố thừa sau tên món trong tin user. */
+function trimDishFragment(fragment) {
+  return String(fragment ?? '')
+    .trim()
+    .replace(/\s+(nhé|nha|ạ|giúp)(?:\s.*)?$/iu, '')
+    .trim();
+}
 
 export function normalizeDishMatchKey(name) {
   return normalizeMenuDishName(String(name ?? ''))
@@ -50,7 +58,7 @@ export function parseQtyOverridesFromMessage(text, dishes) {
 
   for (const m of cleaned.matchAll(QTY_OVERRIDE_RE)) {
     const qty = Number.parseInt(m[1], 10);
-    const frag = m[2].trim();
+    const frag = trimDishFragment(m[2]);
     const idx = matchDishIndex(frag, dishes);
     if (idx != null && qty >= 2 && qty <= 5) {
       overrides[idx] = qty;
