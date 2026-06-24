@@ -11,6 +11,11 @@ import {
 import { findOrderForSheetRow, quoteSheetTabName, resolveOrdersSlackIdRange, resolveSlackUserProfiles } from './sheet-slack.js';
 import { nowGmt7 } from './time-constants.js';
 import { getDishesMenuForDate } from './dynamo-dishes.js';
+import { getOrderOverridesByUserForDate } from './dynamo-order-overrides.js';
+import {
+  formatDishNamesWithQtyOverrides,
+  userHasOrderContent,
+} from './order-qty.js';
 
 /**
  * @param {Array<{ emoji: string; dish_index: number; user_ids: string[] }>} orders
@@ -88,10 +93,11 @@ export function formatOrderLine(
   order,
   dishes,
   defaultPrice = DEFAULT_MEAL_PRICE,
-  upPrice = UPSIZE_MEAL_PRICE
+  upPrice = UPSIZE_MEAL_PRICE,
+  qtyOverrides = {}
 ) {
   const priceLabel = formatPriceLabel(order.price, defaultPrice, upPrice);
-  const names = formatDishNames(order.dishIndices, dishes);
+  const names = formatDishNamesWithQtyOverrides(order.dishIndices, dishes, qtyOverrides);
   return `suất ${priceLabel} ${names}, cho ${userName}`;
 }
 
@@ -107,24 +113,27 @@ export function buildZaloSummaryText(
   dishes,
   userOrderSlackIds,
   defaultPrice = DEFAULT_MEAL_PRICE,
-  upPrice = UPSIZE_MEAL_PRICE
+  upPrice = UPSIZE_MEAL_PRICE,
+  overridesByUserId = {}
 ) {
   const lines = [];
   const seen = new Set();
 
   for (const uid of userOrderSlackIds) {
     const order = ordersByUserId[uid];
-    if (!order || order.dishIndices.length === 0 || seen.has(uid)) continue;
+    const qtyOverrides = overridesByUserId[uid] || {};
+    if (!order || !userHasOrderContent(order.dishIndices, qtyOverrides) || seen.has(uid)) continue;
     seen.add(uid);
     const name = userIdToName[uid] ?? uid;
-    lines.push(formatOrderLine(name, order, dishes, defaultPrice, upPrice));
+    lines.push(formatOrderLine(name, order, dishes, defaultPrice, upPrice, qtyOverrides));
   }
 
   for (const [uid, order] of Object.entries(ordersByUserId)) {
-    if (seen.has(uid) || order.dishIndices.length === 0) continue;
+    const qtyOverrides = overridesByUserId[uid] || {};
+    if (seen.has(uid) || !userHasOrderContent(order.dishIndices, qtyOverrides)) continue;
     seen.add(uid);
     const name = userIdToName[uid] ?? uid;
-    lines.push(formatOrderLine(name, order, dishes, defaultPrice, upPrice));
+    lines.push(formatOrderLine(name, order, dishes, defaultPrice, upPrice, qtyOverrides));
   }
 
   let count30k = 0;
@@ -216,6 +225,7 @@ export async function aggregateOrderSummaryFromReactions({
   botToken,
   dynamo,
   dishesTableName,
+  orderOverridesTableName,
   dishes: paramsDishes,
 }) {
   const defaultPrice = parseInt(config['orders-default-price'] || String(DEFAULT_MEAL_PRICE), 10);
@@ -233,6 +243,11 @@ export async function aggregateOrderSummaryFromReactions({
     dishes = (await getDishesMenuForDate(dynamo, dishesTableName)) ?? [];
   }
 
+  const overridesByUserId =
+    dynamo && orderOverridesTableName
+      ? await getOrderOverridesByUserForDate(dynamo, orderOverridesTableName)
+      : {};
+
   const ordersUserRange = config['orders-user-range'] || 'A15:A100';
   const ordersSlackIdRange = resolveOrdersSlackIdRange(config);
   const matchedUserIds = await listMatchedUserIds(
@@ -242,7 +257,8 @@ export async function aggregateOrderSummaryFromReactions({
     ordersUserRange,
     ordersSlackIdRange,
     ordersByUserId,
-    userIdToNameKeys
+    userIdToNameKeys,
+    overridesByUserId
   );
 
   const summaryText = buildZaloSummaryText(
@@ -251,7 +267,8 @@ export async function aggregateOrderSummaryFromReactions({
     dishes,
     matchedUserIds,
     defaultPrice,
-    upPrice
+    upPrice,
+    overridesByUserId
   );
 
   const zaloCell = resolveZaloSummaryCell(config);
@@ -267,6 +284,7 @@ export async function aggregateOrderSummaryFromReactions({
     zaloCell,
     defaultPrice,
     upPrice,
+    overridesByUserId,
   };
 }
 
@@ -282,6 +300,7 @@ export async function persistOrdersToSheet({
   summaryText,
   zaloCell,
   dishes,
+  overridesByUserId = {},
 }) {
   const ordersUserRange = config['orders-user-range'] || 'A15:A100';
   const ordersSlackIdRange = resolveOrdersSlackIdRange(config);
@@ -301,7 +320,8 @@ export async function persistOrdersToSheet({
     ordersByUserId,
     userIdToNameKeys,
     userIdToName,
-    dishes
+    dishes,
+    overridesByUserId
   );
 
   if (summaryText) {
@@ -316,7 +336,9 @@ export async function persistOrdersToSheet({
  */
 export async function syncOrdersToSheetAndSummary(params) {
   const agg = await aggregateOrderSummaryFromReactions(params);
-  const orderCount = Object.values(agg.ordersByUserId).filter((o) => o.dishIndices?.length).length;
+  const orderCount = Object.entries(agg.ordersByUserId).filter(([uid, o]) =>
+    userHasOrderContent(o.dishIndices, agg.overridesByUserId?.[uid])
+  ).length;
   const summaryText =
     orderCount === 0 ? 'Nay bọn em không đặt gì anh nhé' : agg.summaryText;
 
@@ -331,6 +353,7 @@ export async function syncOrdersToSheetAndSummary(params) {
     summaryText,
     zaloCell: agg.zaloCell,
     dishes: agg.dishes,
+    overridesByUserId: agg.overridesByUserId,
   });
 
   return { ...agg, summaryText };
@@ -343,7 +366,8 @@ async function listMatchedUserIds(
   ordersUserRange,
   ordersSlackIdRange,
   ordersByUserId,
-  userIdToNameKeys
+  userIdToNameKeys,
+  overridesByUserId = {}
 ) {
   const quoted = quoteSheetTabName(ordersSheetName);
   const userRange = `${quoted}!${ordersUserRange}`;
@@ -360,7 +384,8 @@ async function listMatchedUserIds(
     const userNameInSheet = userRows[i]?.[0] != null ? String(userRows[i][0]).trim() : '';
     const sheetSlackId = slackIdRows[i]?.[0] != null ? String(slackIdRows[i][0]).trim() : '';
     const hit = findOrderForSheetRow(userNameInSheet, sheetSlackId, ordersByUserId, userIdToNameKeys);
-    if (hit && hit.order.dishIndices.length > 0) {
+    const qtyOverrides = hit ? overridesByUserId[hit.userId] || {} : {};
+    if (hit && userHasOrderContent(hit.order.dishIndices, qtyOverrides)) {
       matchedUserIds.push(hit.userId);
     }
   }
@@ -437,7 +462,8 @@ export async function writeOrdersToSheet(
   ordersByUserId,
   userIdToNameKeys,
   userIdToName,
-  dishes = []
+  dishes = [],
+  overridesByUserId = {}
 ) {
   const quoted = quoteSheetTabName(ordersSheetName);
   const userRange = `${quoted}!${ordersUserRange}`;
@@ -499,9 +525,13 @@ export async function writeOrdersToSheet(
     const userNameInSheet = userRows[i]?.[0] != null ? String(userRows[i][0]).trim() : '';
     const sheetSlackId = slackIdRows[i]?.[0] != null ? String(slackIdRows[i][0]).trim() : '';
     const hit = findOrderForSheetRow(userNameInSheet, sheetSlackId, ordersByUserId, userIdToNameKeys);
-    if (hit && hit.order.dishIndices.length > 0) {
+    const qtyOverrides = hit ? overridesByUserId[hit.userId] || {} : {};
+    if (hit && userHasOrderContent(hit.order.dishIndices, qtyOverrides)) {
       matchedUserIds.push(hit.userId);
-      newBlock.push([formatDishNames(hit.order.dishIndices, dishes), hit.order.price]);
+      newBlock.push([
+        formatDishNamesWithQtyOverrides(hit.order.dishIndices, dishes, qtyOverrides),
+        hit.order.price,
+      ]);
     } else {
       newBlock.push(['', '']);
     }

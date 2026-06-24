@@ -44,6 +44,7 @@ async function getTodayMenuRow(tableName) {
 export async function runFromConfig(config) {
   const tableName = (process.env.TABLE_NAME || '').trim();
   const dishesTableName = (process.env.DISHES_TABLE_NAME || '').trim();
+  const orderOverridesTableName = (process.env.ORDER_OVERRIDES_TABLE_NAME || '').trim();
   const botToken = (config['bot-token'] || '').trim();
   const sheetId = (config['sheet-id'] || config['sheet_id'] || '').trim();
   const credentials = (config['sheet-credentials'] || config['sheet_credentials'] || '').trim();
@@ -91,9 +92,13 @@ export async function runFromConfig(config) {
     botToken,
     dynamo,
     dishesTableName,
+    orderOverridesTableName,
   });
 
-  const orderCount = Object.values(agg.ordersByUserId).filter((o) => o.dishIndices?.length).length;
+  const orderCount = Object.entries(agg.ordersByUserId).filter(([uid, o]) => {
+    const ov = agg.overridesByUserId?.[uid];
+    return o.dishIndices?.length || (ov && Object.keys(ov).length);
+  }).length;
   const noOrders = orderCount === 0;
   /** Tin Zalo: build trên Lambda, không đọc từ sheet. */
   const zaloMessage = noOrders ? NO_ORDERS_MSG : agg.summaryText;
@@ -109,6 +114,7 @@ export async function runFromConfig(config) {
     summaryText: zaloMessage,
     zaloCell: agg.zaloCell,
     dishes: agg.dishes,
+    overridesByUserId: agg.overridesByUserId,
   });
 
   if (ZALO_SEND_DISABLED) {

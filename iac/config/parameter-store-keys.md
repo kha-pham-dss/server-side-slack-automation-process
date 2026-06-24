@@ -33,7 +33,7 @@ Lambda đọc SSM bằng `GetParametersByPath` có **phân trang** (mỗi lần 
 | `/slack-dishes/zalo-language`          | String (optional)       | Mặc định `vi`.                                                                                                                                                                                                                                                                                                                |
 
 
-**DynamoDB (SAM):** `slack-dishes-menu-message` (metadata menu Slack), `slack-dishes-dishes-menu` (danh sách món theo ngày GMT+7). Env `TABLE_NAME`, `DISHES_TABLE_NAME`.
+**DynamoDB (SAM):** `slack-dishes-menu-message` (metadata menu Slack), `slack-dishes-dishes-menu` (danh sách món theo ngày GMT+7), `slack-dishes-order-overrides` (qty `2x`–`5x` theo user/ngày). Env `TABLE_NAME`, `DISHES_TABLE_NAME`, `ORDER_OVERRIDES_TABLE_NAME`.
 
 **Ghi chú:** Cửa sổ poll ảnh menu = `POST_MENU` + 5 phút → trước `ZALO_SUMMARY` (`serverless/shared/time-constants.js`). Đổi giờ menu (vd. 9h): sửa `POST_MENU_HOUR_GMT7` + cron PostMenu trong `iac/template.yaml`; nếu menu &lt; 9h mở rộng giờ UTC trong cron `menu-images-sync-poll`.
 

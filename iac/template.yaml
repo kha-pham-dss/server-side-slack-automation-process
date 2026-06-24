@@ -42,6 +42,24 @@ Resources:
       PointInTimeRecoverySpecification:
         PointInTimeRecoveryEnabled: false
 
+  OrderOverridesTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: slack-dishes-order-overrides
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: date
+          AttributeType: S
+        - AttributeName: user_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: date
+          KeyType: HASH
+        - AttributeName: user_id
+          KeyType: RANGE
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: false
+
   PostMenuFunction:
     Type: AWS::Serverless::Function
     Metadata:
@@ -120,6 +138,7 @@ Resources:
         Variables:
           TABLE_NAME: !Ref MenuMessageTable
           DISHES_TABLE_NAME: !Ref DishesMenuTable
+          ORDER_OVERRIDES_TABLE_NAME: !Ref OrderOverridesTable
           PARAMETER_PREFIX: /slack-dishes
           ZALO_SUMMARY_CELL: 'S62'
       Policies:
@@ -136,9 +155,12 @@ Resources:
             - Effect: Allow
               Action:
                 - dynamodb:GetItem
+                - dynamodb:PutItem
+                - dynamodb:Query
               Resource:
                 - !GetAtt MenuMessageTable.Arn
                 - !GetAtt DishesMenuTable.Arn
+                - !GetAtt OrderOverridesTable.Arn
 
   ZaloSheetSummaryFunction:
     Type: AWS::Serverless::Function
@@ -154,6 +176,7 @@ Resources:
           PARAMETER_PREFIX: /slack-dishes
           TABLE_NAME: !Ref MenuMessageTable
           DISHES_TABLE_NAME: !Ref DishesMenuTable
+          ORDER_OVERRIDES_TABLE_NAME: !Ref OrderOverridesTable
           ZALO_SUMMARY_CELL: 'S62'
       Policies:
         - Version: '2012-10-17'
@@ -169,9 +192,11 @@ Resources:
             - Effect: Allow
               Action:
                 - dynamodb:GetItem
+                - dynamodb:Query
               Resource:
                 - !GetAtt MenuMessageTable.Arn
                 - !GetAtt DishesMenuTable.Arn
+                - !GetAtt OrderOverridesTable.Arn
       Events:
         ZaloSheetSummarySchedule:
           Type: Schedule

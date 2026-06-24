@@ -91,6 +91,8 @@ Sau khi post, danh sách món lưu vào DynamoDB **`slack-dishes-dishes-menu`** 
 
 Ghi đè giá qua SSM: `orders-default-price`, `orders-upsize-price`.
 
+**Đặt món tùy số lượng:** trong thread menu channel, `@Mr.Chef` kèm `2x`–`5x` + tên món (vd. `@Mr.Chef 2x chả cá`). Bot lưu override theo ngày (DynamoDB `slack-dishes-order-overrides`, partition `date` GMT+7) rồi sync reactions + overrides lên sheet / tin Zalo. Nhiều món: `2x chả cá, 3x thịt kho`.
+
 **Sheet mỗi user (như cũ):** cột ngày có cặp (món, giá). Cột món = tên món `Phở+Bún+Cơm`; cột giá = `30000` hoặc `35000`.
 
 ## Zalo summary — tin gửi đi

@@ -11,6 +11,8 @@
     "./orders.js": "./orders.js",
     "./dynamo-dishes.js": "./dynamo-dishes.js",
     "./dynamo-menu.js": "./dynamo-menu.js",
+    "./dynamo-order-overrides.js": "./dynamo-order-overrides.js",
+    "./order-qty.js": "./order-qty.js",
     "./menu-slack.js": "./menu-slack.js",
     "./menu-dm.js": "./menu-dm.js",
     "./text-transforms.js": "./text-transforms.js",

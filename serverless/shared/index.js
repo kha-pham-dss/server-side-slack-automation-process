@@ -66,6 +66,7 @@ export {
   buildOrdersByUserId,
   formatDishNumbers,
   formatDishNames,
+  formatDishNamesWithQtyOverrides,
   formatOrderLine,
   buildZaloSummaryText,
   parseReactionsFromSlackMessage,
@@ -81,6 +82,19 @@ export {
 } from './orders.js';
 
 export { getDishesMenuForDate, putDishesMenuForDate } from './dynamo-dishes.js';
+
+export {
+  getOrderOverridesForUser,
+  getOrderOverridesByUserForDate,
+  mergeOrderOverridesForUser,
+} from './dynamo-order-overrides.js';
+
+export {
+  parseQtyOverridesFromMessage,
+  matchDishIndex,
+  formatDishNamesWithQtyOverrides,
+  userHasOrderContent,
+} from './order-qty.js';
 
 export {
   getMenuMessageForDate,

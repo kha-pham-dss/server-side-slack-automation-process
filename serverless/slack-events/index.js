@@ -171,13 +171,14 @@ async function getTodayMenuMessage() {
   return unmarshall(res.Item);
 }
 
-async function invokeCollectOrders(replyChannelId, replyTs, userId, afterZaloCutoff) {
+async function invokeCollectOrders(replyChannelId, replyTs, userId, afterZaloCutoff, messageText) {
   const payload = JSON.stringify({
     triggeredBy: 'slack_reply',
     replyChannelId,
     replyTs,
     userId,
     afterZaloCutoff,
+    messageText: messageText || '',
   });
   await lambda.send(
     new InvokeCommand({
@@ -334,7 +335,7 @@ export async function handler(event) {
   }
 
   const afterZaloCutoff = isAfterZaloSummaryCutoffNow();
-  await invokeCollectOrders(channel, replyTs, ev.user, afterZaloCutoff);
+  await invokeCollectOrders(channel, replyTs, ev.user, afterZaloCutoff, messageText);
 
   return { statusCode: 200, body: '' };
 }
