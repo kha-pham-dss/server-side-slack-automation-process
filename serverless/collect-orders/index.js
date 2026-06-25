@@ -14,10 +14,8 @@ import {
   formatOrderLine,
   fetchSlackReactions,
   syncOrdersToSheetAndSummary,
-  DEFAULT_MEAL_PRICE,
-  UPSIZE_MEAL_PRICE,
-  formatPriceLabel,
 } from '@slack-dishes/shared/orders.js';
+import { DEFAULT_MEAL_PRICE, UPSIZE_MEAL_PRICE, formatPriceLabel } from '@slack-dishes/shared/meal-constants.js';
 import { parseQtyOverridesFromMessage } from '@slack-dishes/shared/order-qty.js';
 import {
   CACHE_TTL_MS,
@@ -113,17 +111,39 @@ export async function handler(event) {
     const dishes = (await getDishesMenuForDate(dynamo, DISHES_TABLE_NAME)) ?? [];
     const triggeringUserId = event?.userId;
     const messageText = event?.messageText || '';
+    const dateKey = dateKeyGmt7();
 
     let savedOverrides = null;
-    if (triggeringUserId && ORDER_OVERRIDES_TABLE_NAME && messageText) {
+    if (!ORDER_OVERRIDES_TABLE_NAME) {
+      console.warn('CollectOrders: ORDER_OVERRIDES_TABLE_NAME not set — skip DynamoDB qty overrides');
+    } else if (triggeringUserId && messageText) {
       const parsed = parseQtyOverridesFromMessage(messageText, dishes);
       if (Object.keys(parsed).length) {
         await mergeOrderOverridesForUser(dynamo, ORDER_OVERRIDES_TABLE_NAME, triggeringUserId, parsed, {
+          date: dateKey,
           messageTs: event?.replyTs,
         });
         savedOverrides = parsed;
-        console.log('CollectOrders: saved qty overrides', triggeringUserId, parsed);
+        console.log('CollectOrders: saved qty overrides', {
+          table: ORDER_OVERRIDES_TABLE_NAME,
+          date: dateKey,
+          userId: triggeringUserId,
+          overrides: parsed,
+        });
+      } else {
+        console.warn('CollectOrders: qty parse empty', {
+          userId: triggeringUserId,
+          messageText: messageText.slice(0, 200),
+          dishNames: dishes.map((d) => d.name),
+          hint: 'Cần format 2x–5x + tên món khớp menu hôm nay (vd. 2x chả cá)',
+        });
       }
+    } else {
+      console.warn('CollectOrders: skip qty parse', {
+        hasUserId: !!triggeringUserId,
+        hasMessageText: !!messageText,
+        messageTextLen: messageText.length,
+      });
     }
 
     const { orders, upUserIds } = await fetchSlackReactions(botToken, channel_id, message_ts);
@@ -188,12 +208,6 @@ export async function handler(event) {
           `${ping}Có cập nhật đặt món sau khi đã gửi Zalo (user chưa chọn món).`
         );
       }
-    } else {
-      const ack =
-        savedOverrides != null
-          ? 'Đã ghi nhận danh sách đặt món (kèm số lượng món) :bee-like:'
-          : 'Đã ghi nhận danh sách đặt món :bee-like:';
-      await postReplyInThread(botToken, channel_id, message_ts, ack);
     }
 
     return {

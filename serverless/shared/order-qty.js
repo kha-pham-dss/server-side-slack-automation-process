@@ -76,18 +76,21 @@ export function formatDishNamesWithQtyOverrides(dishIndices, dishes, qtyOverride
   const parts = [];
   const seen = new Set();
 
+  const pushDish = (i, qty) => {
+    const name = dishes[i]?.name != null ? String(dishes[i].name).trim() : String(i + 1);
+    const label = name || String(i + 1);
+    parts.push(qty >= 2 ? `${qty}x ${label}` : label);
+  };
+
   for (const i of [...dishIndices].sort((a, b) => a - b)) {
     seen.add(i);
-    const name = dishes[i]?.name != null ? String(dishes[i].name).trim() : String(i + 1);
-    const qty = qtyOverrides[i] ?? 1;
-    for (let q = 0; q < qty; q++) parts.push(name || String(i + 1));
+    pushDish(i, qtyOverrides[i] ?? 1);
   }
 
   for (const [idxStr, qty] of Object.entries(qtyOverrides)) {
     const i = Number(idxStr);
     if (!Number.isFinite(i) || seen.has(i) || qty < 2) continue;
-    const name = dishes[i]?.name != null ? String(dishes[i].name).trim() : String(i + 1);
-    for (let q = 0; q < qty; q++) parts.push(name || String(i + 1));
+    pushDish(i, qty);
   }
 
   return parts.join('+');

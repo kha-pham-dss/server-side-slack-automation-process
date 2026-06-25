@@ -1,6 +1,6 @@
 import { GetItemCommand, PutItemCommand, UpdateItemCommand } from '@aws-sdk/client-dynamodb';
 import { marshall, unmarshall } from '@aws-sdk/util-dynamodb';
-import { dateKeyGmt7 } from './time-constants.js';
+import { dateKeyGmt7, dynamoTtlFromDateKey, DYNAMO_TTL_MENU_MESSAGE_DAYS } from './time-constants.js';
 
 /**
  * @param {import('@aws-sdk/client-dynamodb').DynamoDBClient} dynamo
@@ -63,6 +63,7 @@ export async function putMenuMessageForDate(
         menu_dm_parent_ts: menuDmParentTs || '',
         slack_image_file_ids: slackImageFileIds,
         images_sync_complete: hasImages || imagesSyncComplete,
+        ttl: dynamoTtlFromDateKey(date, DYNAMO_TTL_MENU_MESSAGE_DAYS),
       }),
     })
   );
@@ -81,11 +82,13 @@ export async function setMenuImagesSynced(dynamo, tableName, slackImageFileIds, 
       TableName: tableName,
       Key: { date: { S: date } },
       UpdateExpression:
-        'SET updated_at = :u, slack_image_file_ids = :files, images_sync_complete = :done',
+        'SET updated_at = :u, slack_image_file_ids = :files, images_sync_complete = :done, #ttl = :ttl',
+      ExpressionAttributeNames: { '#ttl': 'ttl' },
       ExpressionAttributeValues: {
         ':u': { S: new Date().toISOString() },
         ':files': { L: slackImageFileIds.map((id) => ({ S: id })) },
         ':done': { BOOL: true },
+        ':ttl': { N: String(dynamoTtlFromDateKey(date, DYNAMO_TTL_MENU_MESSAGE_DAYS)) },
       },
     })
   );

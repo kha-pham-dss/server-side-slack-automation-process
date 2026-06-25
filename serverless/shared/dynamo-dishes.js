@@ -1,6 +1,6 @@
 import { DynamoDBClient, GetItemCommand, PutItemCommand } from '@aws-sdk/client-dynamodb';
 import { marshall, unmarshall } from '@aws-sdk/util-dynamodb';
-import { dateKeyGmt7 } from './time-constants.js';
+import { dateKeyGmt7, dynamoTtlFromDateKey, DYNAMO_TTL_DISHES_MENU_DAYS } from './time-constants.js';
 
 /**
  * @param {DynamoDBClient} dynamo
@@ -46,6 +46,7 @@ export async function putDishesMenuForDate(dynamo, tableName, dishes, date = dat
         date,
         dishes: normalized,
         updated_at: new Date().toISOString(),
+        ttl: dynamoTtlFromDateKey(date, DYNAMO_TTL_DISHES_MENU_DAYS),
       }),
     })
   );

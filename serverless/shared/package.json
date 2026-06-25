@@ -7,6 +7,7 @@
     ".": "./index.js",
     "./time-constants.js": "./time-constants.js",
     "./sheet-slack.js": "./sheet-slack.js",
+    "./sheets.js": "./sheets.js",
     "./meal-constants.js": "./meal-constants.js",
     "./orders.js": "./orders.js",
     "./dynamo-dishes.js": "./dynamo-dishes.js",

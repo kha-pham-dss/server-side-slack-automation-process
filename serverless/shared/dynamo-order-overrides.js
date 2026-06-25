@@ -1,6 +1,6 @@
 import { GetItemCommand, PutItemCommand, QueryCommand } from '@aws-sdk/client-dynamodb';
 import { marshall, unmarshall } from '@aws-sdk/util-dynamodb';
-import { dateKeyGmt7 } from './time-constants.js';
+import { dateKeyGmt7, dynamoTtlFromDateKey, DYNAMO_TTL_ORDER_OVERRIDES_DAYS } from './time-constants.js';
 
 /**
  * @param {Record<string, unknown>} raw
@@ -94,6 +94,7 @@ export async function mergeOrderOverridesForUser(
         ),
         updated_at: new Date().toISOString(),
         last_message_ts: messageTs || '',
+        ttl: dynamoTtlFromDateKey(dateKey, DYNAMO_TTL_ORDER_OVERRIDES_DAYS),
       }),
     })
   );

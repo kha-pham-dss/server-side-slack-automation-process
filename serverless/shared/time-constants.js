@@ -67,6 +67,28 @@ export function isWithinZaloMenuImagePollWindow(now = new Date()) {
   );
 }
 
+/** DynamoDB TTL — số ngày giữ bản ghi sau ngày menu (GMT+7); hết hạn lúc 00:00 GMT+7 ngày date + N. */
+export const DYNAMO_TTL_DISHES_MENU_DAYS = 30;
+export const DYNAMO_TTL_MENU_MESSAGE_DAYS = 7;
+export const DYNAMO_TTL_ORDER_OVERRIDES_DAYS = 7;
+
+/** @deprecated dùng hằng số theo từng bảng */
+export const DYNAMO_TTL_RETENTION_DAYS = DYNAMO_TTL_DISHES_MENU_DAYS;
+
+/**
+ * Unix epoch (giây) cho DynamoDB TTL — xóa sau retentionDays kể từ dateKey.
+ * @param {string} dateKey YYYY-MM-DD (GMT+7)
+ * @param {number} retentionDays
+ */
+export function dynamoTtlFromDateKey(dateKey, retentionDays = DYNAMO_TTL_DISHES_MENU_DAYS) {
+  const [year, month, day] = String(dateKey).split('-').map(Number);
+  if (!year || !month || !day) {
+    throw new Error(`Invalid dateKey for TTL: ${dateKey}`);
+  }
+  const expireMs = Date.UTC(year, month - 1, day + retentionDays) - GMT7_OFFSET_MS;
+  return Math.floor(expireMs / 1000);
+}
+
 export function nowGmt7(now = new Date()) {
   return new Date(now.getTime() + GMT7_OFFSET_MS);
 }
