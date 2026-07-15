@@ -19,7 +19,8 @@ export function normalizeDishMatchKey(name) {
     .trim()
     .toLowerCase()
     .normalize('NFD')
-    .replace(/\p{M}/gu, '');
+    .replace(/\p{M}/gu, '')
+    .replace(/\s+/g, ' ');
 }
 
 /**

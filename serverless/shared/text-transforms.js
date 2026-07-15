@@ -8,11 +8,13 @@ const SLACK_DISPLAY_NAME_ALIASES = {
 };
 
 /**
- * Nhà bếp hay gõ nhầm: "gián" → "rán", "quận" → "cuộn".
+ * Nhà bếp hay gõ nhầm: "gián" → "rán", "quận" → "cuộn", "trả" → "chả", "nốt" → "lốt".
  * @param {string} name
  */
 export function normalizeMenuDishName(name) {
   return String(name ?? '')
+    .replace(/trả/giu, 'chả')
+    .replace(/nốt/giu, 'lốt')
     .replace(/gián/giu, 'rán')
     .replace(/quận/giu, 'cuộn');
 }
