@@ -101,3 +101,29 @@ export function userHasOrderContent(dishIndices, qtyOverrides = {}) {
   if (dishIndices?.length) return true;
   return Object.keys(qtyOverrides).length > 0;
 }
+
+/**
+ * Tổng số phần món (reaction + hệ số 2x–5x). Món chỉ có trong overrides vẫn tính.
+ * @param {number[]} dishIndices
+ * @param {Record<number, number>} [qtyOverrides]
+ */
+export function totalPortions(dishIndices = [], qtyOverrides = {}) {
+  const seen = new Set();
+  let total = 0;
+
+  for (const i of dishIndices) {
+    seen.add(i);
+    const qty = Number(qtyOverrides[i] ?? 1);
+    total += Number.isFinite(qty) && qty >= 1 ? qty : 1;
+  }
+
+  for (const [idxStr, qtyRaw] of Object.entries(qtyOverrides)) {
+    const i = Number(idxStr);
+    if (!Number.isFinite(i) || seen.has(i)) continue;
+    const qty = Number(qtyRaw);
+    if (!Number.isFinite(qty) || qty < 2) continue;
+    total += qty;
+  }
+
+  return total;
+}

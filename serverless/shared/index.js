@@ -64,6 +64,7 @@ export {
 
 export {
   buildOrdersByUserId,
+  mergeQtyOverLimitWarnings,
   formatDishNumbers,
   formatDishNames,
   formatOrderLine,
@@ -93,6 +94,7 @@ export {
   matchDishIndex,
   formatDishNamesWithQtyOverrides,
   userHasOrderContent,
+  totalPortions,
 } from './order-qty.js';
 
 export {

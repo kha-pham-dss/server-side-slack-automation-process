@@ -15,6 +15,7 @@ import { getOrderOverridesByUserForDate } from './dynamo-order-overrides.js';
 import {
   formatDishNamesWithQtyOverrides,
   userHasOrderContent,
+  totalPortions,
 } from './order-qty.js';
 
 /**
@@ -65,6 +66,44 @@ export function buildOrdersByUserId(
   }
 
   return { ordersByUserId, cappedUserIds };
+}
+
+/**
+ * Bổ sung user vượt tổng phần (kể cả 2x–5x) vào cappedUserIds — chỉ để ping, không cắt đơn.
+ * @param {Record<string, { dishIndices: number[]; price: number }>} ordersByUserId
+ * @param {Array<{ userId: string; dishCount: number; maxDishes: number; price: number }>} cappedUserIds
+ * @param {Record<string, Record<number, number>>} overridesByUserId
+ */
+export function mergeQtyOverLimitWarnings(
+  ordersByUserId,
+  cappedUserIds,
+  overridesByUserId = {},
+  defaultPrice = DEFAULT_MEAL_PRICE,
+  upPrice = UPSIZE_MEAL_PRICE,
+  maxDefaultDishes = MAX_DISHES_PER_USER_DEFAULT,
+  maxUpsizeDishes = MAX_DISHES_PER_USER_UPSIZE
+) {
+  const already = new Set(cappedUserIds.map((c) => c.userId));
+  const out = [...cappedUserIds];
+
+  for (const [uid, order] of Object.entries(ordersByUserId)) {
+    if (already.has(uid)) continue;
+    const qtyOverrides = overridesByUserId[uid] || {};
+    const portions = totalPortions(order.dishIndices, qtyOverrides);
+    const isUpsize = order.price === upPrice;
+    const maxDishes = isUpsize ? maxUpsizeDishes : maxDefaultDishes;
+    if (portions > maxDishes) {
+      out.push({
+        userId: uid,
+        dishCount: portions,
+        maxDishes,
+        price: order.price ?? (isUpsize ? upPrice : defaultPrice),
+      });
+      already.add(uid);
+    }
+  }
+
+  return out;
 }
 
 /** @param {number[]} dishIndices 0-based */
@@ -233,7 +272,12 @@ export async function aggregateOrderSummaryFromReactions({
 
   const { orders, upUserIds } = await fetchSlackReactions(botToken, channelId, messageTs);
   const { userIdToName, userIdToNameKeys } = await resolveSlackUserProfiles(botToken);
-  const { ordersByUserId, cappedUserIds } = buildOrdersByUserId(orders, upUserIds, defaultPrice, upPrice);
+  const { ordersByUserId, cappedUserIds: cappedFromReactions } = buildOrdersByUserId(
+    orders,
+    upUserIds,
+    defaultPrice,
+    upPrice
+  );
 
   let dishes = paramsDishes;
   if (!dishes) {
@@ -247,6 +291,14 @@ export async function aggregateOrderSummaryFromReactions({
     dynamo && orderOverridesTableName
       ? await getOrderOverridesByUserForDate(dynamo, orderOverridesTableName)
       : {};
+
+  const cappedUserIds = mergeQtyOverLimitWarnings(
+    ordersByUserId,
+    cappedFromReactions,
+    overridesByUserId,
+    defaultPrice,
+    upPrice
+  );
 
   const ordersUserRange = config['orders-user-range'] || 'A15:A100';
   const ordersSlackIdRange = resolveOrdersSlackIdRange(config);
