@@ -9,10 +9,15 @@ const SLACK_DISPLAY_NAME_ALIASES = {
 
 /**
  * Nhà bếp hay gõ nhầm: "gián" → "rán", "quận" → "cuộn", "trả" → "chả", "nốt" → "lốt".
+ * Cũng bỏ prefix number list (vd. `1. Cật xào giá` → `Cật xào giá`).
  * @param {string} name
  */
 export function normalizeMenuDishName(name) {
   return String(name ?? '')
+    .replace(/\u00a0/g, ' ')
+    .replace(/^\s*\d+[.)]\s+/, '')
+    .replace(/\s+/g, ' ')
+    .trim()
     .replace(/trả/giu, 'chả')
     .replace(/nốt/giu, 'lốt')
     .replace(/gián/giu, 'rán')

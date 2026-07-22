@@ -48,6 +48,17 @@ export function buildMenuSlackBlocks(dishes, imageFileIds = []) {
         ].join('\n'),
       },
     },
+    { type: 'divider' },
+    {
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: [
+          '11h sẽ chốt đơn gửi sang quán.',
+          'Sau 11h, vui lòng ping @Mr.Chef để xác nhận lại.',
+        ].join('\n'),
+      },
+    },
   ];
 
   if (imageFileIds.length) {
