@@ -2,6 +2,23 @@
 
 Server-side Slack dishes ordering (vendor mới): đăng thực đơn lúc **9:30 GMT+7**, user react chọn món (tối đa **5 món/người**), lúc **11:00 GMT+7** tổng hợp đơn từ Slack reactions → ghi Google Sheet + ô **S62** → gửi Zalo nhóm. Tùy chọn: Slack Events API để **reply dưới menu + @Mr.Chef** cập nhật lại đơn (sau 11h: cập nhật sheet, ping reconcile, không gửi lại Zalo). Tất cả ngày/giờ dùng **GMT+7**.
 
+## Features
+
+| Feature | Mô tả |
+|---------|--------|
+| **Post menu** | 9:30 GMT+7 (T2–T6): đọc list món từ DM, post Block Kit lên channel, lưu DynamoDB; DM `Bỏ qua hôm nay` → skip |
+| **Menu images sync** | Ảnh reply trong thread DM → `chat.update` tin menu (event `message.im` + poll fallback) |
+| **Đặt món bằng react** | `:one:`…`:twenty:` chọn món; `:up:` upsize 35k (mặc định 30k; ≤4 / ≤5 phần) |
+| **Qty override `@Mr.Chef`** | Reply thread `2x`–`5x` + tên món → Dynamo overrides → sheet/Zalo; cảnh báo nếu vượt limit phần |
+| **Collect orders** | Slack Events → ghi sheet + S62; trước 11h ✅; sau 11h ping reconcile |
+| **Zalo sheet summary** | ~11:00 GMT+7: tổng hợp từ reactions + dishes Dynamo → gửi Zalo + ghi sheet |
+| **Auto month sheet** | Ngày 1 ~00:05 GMT+7 (+ lazy khi Collect/Zalo): dup tab `Tháng N / YYYY` gần nhất, clear data đặt món trên tab mới |
+| **Control channel `POST:`** | Channel private gửi `POST: …` → bot post vào channel đặt cơm |
+| **Sync Slack IDs** | Invoke tay: map tên sheet → cột Slack user ID (mặc định `BZ`) |
+| **Dish name normalize** | Strip number-list prefix; typo nhà bếp (`gián`→`rán`, …); match món ưu tiên exact (tránh `gà rang` → `Gà rán`) |
+
+Design / plan gần đây: `docs/superpowers/specs/`, `docs/superpowers/plans/`.
+
 ## Workflow
 
 Timeline (T2–T6):
@@ -131,6 +148,7 @@ Reaction theo index món (0-based trong code, hiển thị 1-based cho user):
 | PostMenu | 9:30 T2–T6 | `cron(30 2 ? * MON-FRI *)` |
 | MenuImagesSync | Event `message.im` + fallback mỗi 10p (POST_MENU+5p → ZALO_SUMMARY) | `cron(5/10 2-3 ? * MON-FRI *)` + gate trong Lambda |
 | ZaloSheetSummary | 11:00 T2–T6 | `cron(0 4 ? * MON-FRI *)` |
+| EnsureMonthSheet | ~00:05 GMT+7 ngày 1 | `cron(5 17 L * ? *)` (cuối tháng 17:05 UTC) |
 | CollectOrders | Không schedule | Chỉ invoke từ Slack Events |
 
 Hằng số trong `serverless/shared/time-constants.js`. Khóa ngày DynamoDB = **YYYY-MM-DD theo GMT+7**.
@@ -140,7 +158,7 @@ Menu 9h30 → poll ảnh ~9:35–10:55. Đổi giờ menu: sửa `POST_MENU_HOUR
 ## Folders
 
 - **`iac/`** – AWS SAM: DynamoDB, EventBridge, Lambdas, Function URL. Xem `iac/README.md`, `iac/config/parameter-store-keys.md`.
-- **`serverless/`** – Lambda source: **post-menu**, **menu-images-sync**, **collect-orders**, **zalo-sheet-summary**, **slack-events**, **sync-slack-ids**, **control-channel-post**. Chi tiết: `serverless/README.md`.
+- **`serverless/`** – Lambda source: **post-menu**, **menu-images-sync**, **collect-orders**, **ensure-month-sheet**, **zalo-sheet-summary**, **slack-events**, **sync-slack-ids**, **control-channel-post**. Chi tiết: `serverless/README.md`.
 - **`serverless/shared/`** – logic dùng chung (`@slack-dishes/shared`):
   - `time-constants.js` — lịch, GMT+7, cửa sổ poll ảnh menu
   - `meal-constants.js` — giá, max món, emoji, S62 default
@@ -149,6 +167,8 @@ Menu 9h30 → poll ảnh ~9:35–10:55. Đổi giờ menu: sửa `POST_MENU_HOUR
   - `menu-dm.js` — đọc DM menu, thread ảnh
   - `menu-slack.js` — Block Kit menu, `chat.update`
   - `orders.js` — parse reactions, format Zalo, ghi sheet + S62
+  - `ensure-month-sheet.js` — auto tạo tab `Tháng N / YYYY`
+  - `order-qty.js` — parse `2x`–`5x`, match tên món
 
 ## Deploy
 
@@ -165,6 +185,7 @@ npm install --prefix serverless/menu-images-sync
 npm install --prefix serverless/collect-orders
 npm install --prefix serverless/slack-events
 npm install --prefix serverless/zalo-sheet-summary
+npm install --prefix serverless/ensure-month-sheet
 npm install --prefix serverless/sync-slack-ids
 ```
 

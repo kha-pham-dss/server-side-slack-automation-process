@@ -25,10 +25,10 @@
 - Create: `serverless/shared/ensure-month-sheet.test.js`
 - Modify: `serverless/shared/index.js`
 
-- [ ] **Step 1:** Write tests for `parseMonthSheetTitle`, `findNearestPriorMonthSheetTitle`, `orderDataClearRangeA1`.
-- [ ] **Step 2:** Implement helpers + `ensureCurrentMonthSheet`; re-export.
-- [ ] **Step 3:** `node --test serverless/shared/ensure-month-sheet.test.js` — PASS.
-- [ ] **Step 4:** Commit.
+- [x] **Step 1:** Write tests for `parseMonthSheetTitle`, `findNearestPriorMonthSheetTitle`, `orderDataClearRangeA1`.
+- [x] **Step 2:** Implement helpers + `ensureCurrentMonthSheet`; re-export.
+- [x] **Step 3:** `node --test serverless/shared/ensure-month-sheet.test.js` — PASS.
+- [x] **Step 4:** Commit.
 
 ### Task 2: Wire CollectOrders + ZaloSheetSummary
 
@@ -36,8 +36,8 @@
 - Modify: `serverless/collect-orders/index.js`
 - Modify: `serverless/zalo-sheet-summary/job.js`
 
-- [ ] **Step 1:** Call `ensureCurrentMonthSheet` after sheets client created, before sheet reads; use returned `sheetName`.
-- [ ] **Step 2:** Commit.
+- [x] **Step 1:** Call `ensureCurrentMonthSheet` after sheets client created, before sheet reads; use returned `sheetName`.
+- [x] **Step 2:** Commit.
 
 ### Task 3: Lambda + SAM
 
@@ -45,9 +45,9 @@
 - Create: `serverless/ensure-month-sheet/` (`index.js`, `package.json`, `Makefile`)
 - Modify: `iac/template.yaml`, `serverless/README.md`, `iac/config/parameter-store-keys.md` (brief note)
 
-- [ ] **Step 1:** Lambda loads SSM, calls ensure, returns result.
-- [ ] **Step 2:** SAM function + schedule `cron(5 17 L * ? *)`.
-- [ ] **Step 3:** Docs + commit.
+- [x] **Step 1:** Lambda loads SSM, calls ensure, returns result.
+- [x] **Step 2:** SAM function + schedule `cron(5 17 L * ? *)`.
+- [x] **Step 3:** Docs + commit.
 
 ---
 
