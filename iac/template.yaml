@@ -110,6 +110,41 @@ Resources:
             Description: Invoke PostMenu at 9:30 GMT+7 (VNT)
             Enabled: true
 
+  EnsureMonthSheetFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: slack-dishes-ensure-month-sheet
+      CodeUri: ../serverless/ensure-month-sheet
+      Handler: index.handler
+      Description: Day 1 ~00:05 GMT+7 — ensure current month tab exists (dup nearest prior Tháng N / YYYY, clear order cells).
+      Timeout: 60
+      Environment:
+        Variables:
+          PARAMETER_PREFIX: /slack-dishes
+          ZALO_SUMMARY_CELL: 'S62'
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - ssm:GetParameter
+                - ssm:GetParameters
+                - ssm:GetParametersByPath
+              Resource:
+                - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/slack-dishes'
+                - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/slack-dishes/*'
+      Events:
+        EnsureMonthSheetSchedule:
+          Type: Schedule
+          Properties:
+            # Last day of month 17:05 UTC = 00:05 GMT+7 on the 1st
+            Schedule: cron(5 17 L * ? *)
+            Name: ensure-month-sheet-monthly
+            Description: Ensure month sheet tab at ~00:05 GMT+7 on the 1st
+            Enabled: true
+
   SyncSlackIdsFunction:
     Type: AWS::Serverless::Function
     Metadata:
@@ -351,6 +386,9 @@ Outputs:
   SyncSlackIdsFunctionArn:
     Description: SyncSlackIds Lambda ARN (invoke manually to fill Slack user ID column on sheet)
     Value: !GetAtt SyncSlackIdsFunction.Arn
+  EnsureMonthSheetFunctionArn:
+    Description: EnsureMonthSheet Lambda ARN (monthly tab create; also lazy from CollectOrders/Zalo)
+    Value: !GetAtt EnsureMonthSheetFunction.Arn
   ZaloSheetSummaryFunctionArn:
     Description: Zalo sheet summary Lambda ARN
     Value: !GetAtt ZaloSheetSummaryFunction.Arn

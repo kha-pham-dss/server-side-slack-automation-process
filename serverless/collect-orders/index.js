@@ -7,7 +7,7 @@ import { DynamoDBClient, GetItemCommand } from '@aws-sdk/client-dynamodb';
 import { unmarshall } from '@aws-sdk/util-dynamodb';
 import { getDishesMenuForDate } from '@slack-dishes/shared/dynamo-dishes.js';
 import { mergeOrderOverridesForUser } from '@slack-dishes/shared/dynamo-order-overrides.js';
-import { getDishesSheetNameForCurrentMonth } from '@slack-dishes/shared/sheet-slack.js';
+import { ensureCurrentMonthSheet } from '@slack-dishes/shared/ensure-month-sheet.js';
 import { getSheetsClient } from '@slack-dishes/shared/sheets.js';
 import { loadConfigFromParameterStore } from '@slack-dishes/shared/ssm-config.js';
 import {
@@ -102,8 +102,12 @@ export async function handler(event) {
     }
 
     const { channel_id, message_ts } = menu;
-    const sheetName = config['dishes-sheet-name'] || getDishesSheetNameForCurrentMonth();
     const sheets = getSheetsClient(credentials);
+    const ensured = await ensureCurrentMonthSheet({ sheets, spreadsheetId: sheetId, config });
+    const sheetName = ensured.sheetName;
+    if (ensured.created) {
+      console.log('CollectOrders: created month sheet', ensured);
+    }
 
     const defaultPrice = parseInt(config['orders-default-price'] || String(DEFAULT_MEAL_PRICE), 10);
     const upPrice = parseInt(config['orders-upsize-price'] || String(UPSIZE_MEAL_PRICE), 10);

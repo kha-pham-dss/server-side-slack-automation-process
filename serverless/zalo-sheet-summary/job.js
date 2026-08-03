@@ -8,10 +8,10 @@ import { unmarshall } from '@aws-sdk/util-dynamodb';
 import { Zalo, ThreadType } from 'zca-js';
 import { dateKeyGmt7 } from '@slack-dishes/shared/time-constants.js';
 import {
-  getDishesSheetNameForCurrentMonth,
   getSheetsClient,
   aggregateOrderSummaryFromReactions,
   persistOrdersToSheet,
+  ensureCurrentMonthSheet,
 } from '@slack-dishes/shared';
 
 /** Ngày đầu vendor mới: manual gửi Zalo; set false sau khi ổn định. */
@@ -79,8 +79,12 @@ export async function runFromConfig(config) {
     return { skipped: true, reason: 'no_table_name' };
   }
 
-  const sheetName = (config['dishes-sheet-name'] || '').trim() || getDishesSheetNameForCurrentMonth();
   const sheets = getSheetsClient(credentials);
+  const ensured = await ensureCurrentMonthSheet({ sheets, spreadsheetId: sheetId, config });
+  const sheetName = ensured.sheetName;
+  if (ensured.created) {
+    console.log('Zalo sheet summary: created month sheet', ensured);
+  }
 
   const agg = await aggregateOrderSummaryFromReactions({
     config,

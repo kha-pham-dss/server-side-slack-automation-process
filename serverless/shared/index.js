@@ -14,6 +14,14 @@ export {
 } from './sheet-slack.js';
 
 export {
+  columnToLetter,
+  parseMonthSheetTitle,
+  findNearestPriorMonthSheetTitle,
+  orderDataClearRangeA1,
+  ensureCurrentMonthSheet,
+} from './ensure-month-sheet.js';
+
+export {
   normalizeMenuDishName,
   normalizeSlackDisplayName,
   addSlackNameMatchKeys,

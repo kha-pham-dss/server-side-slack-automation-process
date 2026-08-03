@@ -3,7 +3,8 @@ Lambda functions for the Slack dishes flow:
 
 - **post-menu** – Runs at **9:30 GMT+7** (Mon–Fri). Reads latest DM with menu source user (mỗi dòng = một món), posts menu to Slack channel (bot token), stores `message_ts` + DM thread ref in DynamoDB. DM `Bỏ qua hôm nay` → skip. Ảnh trong thread DM lúc 9h30 được nhúng ngay; nếu chưa có ảnh, **menu-images-sync** poll sau.
 - **menu-images-sync** – **Event-driven:** `slack-events` invoke khi `message.im` có ảnh trong thread menu DM. **Fallback:** poll thread mỗi 10 phút trong cửa sổ **POST_MENU → ZALO_SUMMARY**. Khi có ảnh → `chat.update` tin menu channel → `images_sync_complete` → dừng poll trong ngày.
-- **collect-orders** – Chỉ invoke từ **slack-events** khi user reply trong thread menu hôm nay và @Mr.Chef. Parse `2x`–`5x` + tên món từ tin reply → lưu `slack-dishes-order-overrides` (theo ngày GMT+7) → đọc `reactions.get` + overrides → ghi sheet + S62. Suất 30k: tối đa 4 món; suất 35k (`:up:`): tối đa 5 món — vượt giới hạn (kể cả sau khi nhân `2x`–`5x`) thì ping ngắn trong thread (vd. `5 món / suất 30k`); không cắt đơn vì qty. Trước 11h: reply "Đã ghi nhận…" + :white_check_mark: trên tin @Mr.Chef; sau 11h: ping reconcile kèm đơn user.
+- **collect-orders** – Chỉ invoke từ **slack-events** khi user reply trong thread menu hôm nay và @Mr.Chef. Parse `2x`–`5x` + tên món từ tin reply → lưu `slack-dishes-order-overrides` (theo ngày GMT+7) → đọc `reactions.get` + overrides → ghi sheet + S62. Suất 30k: tối đa 4 món; suất 35k (`:up:`): tối đa 5 món — vượt giới hạn (kể cả sau khi nhân `2x`–`5x`) thì ping ngắn trong thread (vd. `5 món / suất 30k`); không cắt đơn vì qty. Trước khi ghi sheet: **ensure** tab `Tháng {m} / {y}` (dup tháng gần nhất nếu thiếu). Trước 11h: reply "Đã ghi nhận…" + :white_check_mark: trên tin @Mr.Chef; sau 11h: ping reconcile kèm đơn user.
+- **ensure-month-sheet** – **Schedule** cuối tháng **17:05 UTC** (= **00:05 GMT+7** ngày 1). Dup tab `Tháng N / YYYY` gần nhất → đổi tên tháng hiện tại → clear block đặt món + ô S62. CollectOrders / ZaloSheetSummary cũng gọi lazy cùng helper.
 - **sync-slack-ids** – **Invoke thủ công** (không schedule). Đọc tên từ `orders-user-range`, khớp `users.list`, ghi Slack `U…` vào cột ID (mặc định `BZ15:BZ100`). Chạy sau khi thêm user mới hoặc trước khi bật khớp theo ID. Shared helpers: `serverless/shared` (`@slack-dishes/shared`).
 - **slack-events** – HTTP endpoint (Lambda Function URL). **DM menu:** `message.im` + ảnh trong thread menu hôm nay → invoke menu-images-sync. **Control channel:** tin `POST: …` → gửi thẳng vào `channel-id`. Reply dưới menu channel + @Mr.Chef → collect-orders.
 - **control-channel-post** – Invoke async từ slack-events. Format: `POST: <nội dung>` (vd. `POST: @channel, cho mình thu tiền cơm nhé`). Đích: SSM `channel-id`. Control channel private — quyền gửi lệnh qua membership channel.
@@ -23,6 +24,7 @@ cd collect-orders && npm install && cd ..
 cd slack-events && npm install && cd ..
 cd control-channel-post && npm install && cd ..
 cd zalo-sheet-summary && npm install && cd ..
+cd ensure-month-sheet && npm install && cd ..
 cd menu-images-sync && npm install && cd ..
 cd sync-slack-ids && npm install && cd ..
 ```
