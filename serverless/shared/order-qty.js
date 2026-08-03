@@ -32,17 +32,23 @@ export function matchDishIndex(fragment, dishes) {
   const key = normalizeDishMatchKey(fragment);
   if (!key) return null;
 
-  let best = null;
+  let exact = null;
+  /** Partial: menu name contains query (vd. "gà rang" ⊂ "gà rang muối"). Không dùng key⊃name — sau bỏ dấu "rán"→"ran" ⊂ "rang". */
+  let partial = null;
   for (let i = 0; i < dishes.length; i++) {
     const name = normalizeDishMatchKey(dishes[i]?.name);
     if (!name) continue;
-    if (name === key || name.includes(key) || key.includes(name)) {
-      if (!best || name.length < best.nameLen) {
-        best = { index: i, nameLen: name.length };
+    if (name === key) {
+      exact = i;
+      break;
+    }
+    if (name.includes(key)) {
+      if (!partial || name.length < partial.nameLen) {
+        partial = { index: i, nameLen: name.length };
       }
     }
   }
-  return best?.index ?? null;
+  return exact ?? partial?.index ?? null;
 }
 
 /**
