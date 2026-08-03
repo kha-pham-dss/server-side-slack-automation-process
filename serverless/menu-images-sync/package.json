@@ -1,5 +1,5 @@
 {
-  "name": "slack-dishes-post-menu",
+  "name": "slack-dishes-menu-images-sync",
   "version": "1.0.0",
   "type": "module",
   "main": "index.js",

@@ -1,8 +1,10 @@
 /**
  * Slack Events API endpoint (Lambda Function URL).
  * - url_verification: return challenge.
- * - Reply trong thread menu + @Mr.Chef → CollectOrders (sheet + :white_check_mark: trên reply).
- * - Cùng luồng đó nhưng sau 10:45 GMT+7 → thread reply chỉ @RECONCILE_NOTIFY_SLACK_USER_ID (nhắc gửi lại Zalo).
+ * - Control channel: `POST: …` → gửi vào channel-id (chạy inline).
+ * - DM thread menu + ảnh mới → MenuImagesSync (message.im).
+ * - Reply trong thread menu channel hôm nay + @Mr.Chef → CollectOrders (bắt buộc `thread_ts`).
+ * - Cùng luồng đó nhưng sau 11:00 GMT+7 → collect-orders cập nhật sheet + ping RECONCILE_NOTIFY_SLACK_USER_ID kèm món user đặt.
  */
 
 import crypto from 'crypto';
@@ -15,7 +17,16 @@ import {
   SLACK_SIGNATURE_MAX_AGE_SEC,
   dateKeyGmt7,
   isAfterZaloSummaryCutoffNow,
+  isWithinZaloMenuImagePollWindow,
 } from '@slack-dishes/shared/time-constants.js';
+import {
+  isReplyUnderMenuDmThread,
+  isSlackImMessage,
+  normalizeSlackTs,
+  slackMessageHasImageFiles,
+} from '@slack-dishes/shared/menu-dm.js';
+import { isPostCommand, slackEventMessageText } from '@slack-dishes/shared/post-command.js';
+import { runControlChannelPost } from '@slack-dishes/shared/control-channel-post-job.js';
 
 const dynamo = new DynamoDBClient();
 const lambda = new LambdaClient();
@@ -23,18 +34,68 @@ const ssm = new SSMClient();
 
 const TABLE_NAME = process.env.TABLE_NAME;
 const COLLECT_ORDERS_FUNCTION_NAME = process.env.COLLECT_ORDERS_FUNCTION_NAME;
+const MENU_IMAGES_SYNC_FUNCTION_NAME = process.env.MENU_IMAGES_SYNC_FUNCTION_NAME;
 const PARAMETER_PREFIX = process.env.PARAMETER_PREFIX || '/slack-dishes';
-const RECONCILE_NOTIFY_SLACK_USER_ID = 'U02SJRNAM2M';
+
+/** message subtypes bỏ qua (không phải tin user gõ POST:). */
+const IGNORED_MESSAGE_SUBTYPES = new Set([
+  'message_changed',
+  'message_deleted',
+  'channel_join',
+  'channel_leave',
+  'channel_topic',
+  'channel_purpose',
+  'channel_name',
+  'channel_archive',
+  'channel_unarchive',
+  'group_join',
+  'group_leave',
+  'group_topic',
+  'group_name',
+  'group_archive',
+  'group_unarchive',
+]);
 
 /** @type {{ value: string | null | undefined; at: number }} */
 let mrChefUserIdCache = { value: undefined, at: 0 };
 /** @type {{ value: string | null | undefined; at: number }} */
-let botTokenCache = { value: undefined, at: 0 };
+let controlChannelIdCache = { value: undefined, at: 0 };
 
 function messageMentionsSlackUser(text, slackUserId) {
   if (!text || !slackUserId) return false;
-  // Slack: <@U123> or <@U123|display name>
   return text.includes(`<@${slackUserId}`);
+}
+
+function postCommandSkipReason({ controlChannelId, channel, inThread, postCmd }) {
+  if (!postCmd) return null;
+  if (!controlChannelId) return 'no_control_channel_id_ssm';
+  if (channel !== controlChannelId) return 'channel_mismatch';
+  if (inThread) return 'in_thread';
+  return null;
+}
+
+async function getControlChannelId() {
+  if (Date.now() - controlChannelIdCache.at < CACHE_TTL_MS && controlChannelIdCache.value !== undefined) {
+    return controlChannelIdCache.value;
+  }
+
+  try {
+    const res = await ssm.send(
+      new GetParameterCommand({
+        Name: `${PARAMETER_PREFIX}/control-channel-id`,
+        WithDecryption: false,
+      })
+    );
+    const id = (res.Parameter?.Value ?? '').trim() || null;
+    controlChannelIdCache = { value: id, at: Date.now() };
+    return id;
+  } catch (e) {
+    if (e?.name === 'ParameterNotFound') {
+      controlChannelIdCache = { value: null, at: Date.now() };
+      return null;
+    }
+    throw e;
+  }
 }
 
 async function getMrChefSlackUserId() {
@@ -65,43 +126,8 @@ async function getMrChefSlackUserId() {
   }
 }
 
-async function getBotToken() {
-  const fromEnv = (process.env.BOT_TOKEN || '').trim();
-  if (fromEnv) return fromEnv;
-
-  if (Date.now() - botTokenCache.at < CACHE_TTL_MS && botTokenCache.value !== undefined) {
-    return botTokenCache.value;
-  }
-
-  try {
-    const res = await ssm.send(
-      new GetParameterCommand({
-        Name: `${PARAMETER_PREFIX}/bot-token`,
-        WithDecryption: true,
-      })
-    );
-    const v = (res.Parameter?.Value ?? '').trim();
-    const token = v || null;
-    botTokenCache = { value: token, at: Date.now() };
-    return token;
-  } catch (e) {
-    if (e?.name === 'ParameterNotFound') {
-      botTokenCache = { value: null, at: Date.now() };
-      return null;
-    }
-    throw e;
-  }
-}
-
 function dateKey() {
   return dateKeyGmt7();
-}
-
-/** So khớp ts menu (DynamoDB) với reaction item.ts dù Slack khác độ chính xác chuỗi. */
-function normalizeSlackTs(ts) {
-  if (ts == null || ts === '') return '';
-  const n = parseFloat(String(ts));
-  return Number.isFinite(n) ? n.toFixed(6) : String(ts).trim();
 }
 
 function isReplyUnderTodayMenu(channel, threadTs, menu) {
@@ -145,35 +171,35 @@ async function getTodayMenuMessage() {
   return unmarshall(res.Item);
 }
 
-async function postSlackThreadReply(botToken, channelId, threadTs, text) {
-  const res = await fetch('https://slack.com/api/chat.postMessage', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json; charset=utf-8',
-      Authorization: `Bearer ${botToken}`,
-    },
-    body: JSON.stringify({
-      channel: channelId,
-      thread_ts: threadTs,
-      text,
-    }),
-  });
-  const data = await res.json();
-  if (!data.ok) throw new Error(`Slack chat.postMessage: ${data.error ?? res.status}`);
-}
-
-/**
- * Invoke CollectOrders with payload so it adds reaction to the reply and does not post schedule message.
- */
-async function invokeCollectOrders(replyChannelId, replyTs) {
+async function invokeCollectOrders(replyChannelId, replyTs, userId, afterZaloCutoff, messageText) {
   const payload = JSON.stringify({
     triggeredBy: 'slack_reply',
     replyChannelId,
     replyTs,
+    userId,
+    afterZaloCutoff,
+    messageText: messageText || '',
   });
   await lambda.send(
     new InvokeCommand({
       FunctionName: COLLECT_ORDERS_FUNCTION_NAME,
+      InvocationType: 'Event',
+      Payload: payload,
+    })
+  );
+}
+
+async function invokeMenuImagesSync(dmChannelId, threadTs, messageTs, userId) {
+  const payload = JSON.stringify({
+    triggeredBy: 'slack_dm_image',
+    dmChannelId,
+    threadTs,
+    messageTs,
+    userId,
+  });
+  await lambda.send(
+    new InvokeCommand({
+      FunctionName: MENU_IMAGES_SYNC_FUNCTION_NAME,
       InvocationType: 'Event',
       Payload: payload,
     })
@@ -220,37 +246,96 @@ export async function handler(event) {
     return { statusCode: 200, body: '' };
   }
 
+  if (ev.subtype && IGNORED_MESSAGE_SUBTYPES.has(ev.subtype)) {
+    return { statusCode: 200, body: '' };
+  }
+
   const threadTs = ev.thread_ts || ev.ts;
   const channel = ev.channel;
+  const channelType = ev.channel_type;
   const replyTs = ev.ts;
-
+  const messageText = slackEventMessageText(ev);
+  const inThread = !!ev.thread_ts;
   const menu = await getTodayMenuMessage();
-  if (!isReplyUnderTodayMenu(channel, threadTs, menu)) {
+
+  if (
+    MENU_IMAGES_SYNC_FUNCTION_NAME &&
+    inThread &&
+    slackMessageHasImageFiles(ev) &&
+    isSlackImMessage(channel, channelType) &&
+    menu &&
+    !menu.images_sync_complete &&
+    isReplyUnderMenuDmThread(channel, threadTs, menu) &&
+    isWithinZaloMenuImagePollWindow()
+  ) {
+    console.log('slack-events: DM menu thread image → MenuImagesSync', {
+      channel,
+      threadTs,
+      messageTs: ev.ts,
+      userId: ev.user,
+    });
+    try {
+      await invokeMenuImagesSync(channel, threadTs, ev.ts, ev.user);
+    } catch (err) {
+      console.error('slack-events: MenuImagesSync invoke failed', err?.message || err);
+    }
+    return { statusCode: 200, body: '' };
+  }
+
+  const controlChannelId = await getControlChannelId();
+  const postCmd = isPostCommand(messageText);
+
+  if (controlChannelId && channel === controlChannelId) {
+    console.log('slack-events: control channel message', {
+      subtype: ev.subtype || null,
+      inThread,
+      postCmd,
+      textPreview: String(messageText || '').slice(0, 60),
+    });
+  }
+
+  if (postCmd) {
+    console.log('slack-events: POST command seen', {
+      channel,
+      controlChannelId,
+      channelMatch: channel === controlChannelId,
+      inThread,
+      skip: postCommandSkipReason({ controlChannelId, channel, inThread, postCmd }),
+      textPreview: String(messageText || '').slice(0, 60),
+    });
+  } else if (ev.subtype) {
+    console.log('slack-events: message ignored subtype', {
+      subtype: ev.subtype,
+      channel,
+      textPreview: String(messageText || '').slice(0, 40),
+    });
+  }
+
+  if (controlChannelId && channel === controlChannelId && !inThread && postCmd) {
+    try {
+      await runControlChannelPost({
+        userId: ev.user,
+        controlChannelId: channel,
+        ackMessageTs: ev.ts,
+        text: messageText,
+      });
+    } catch (err) {
+      console.error('slack-events: control-channel-post failed', err?.message || err);
+    }
+    return { statusCode: 200, body: '' };
+  }
+
+  if (!isReplyUnderTodayMenu(channel, threadTs, menu) || !inThread) {
     return { statusCode: 200, body: '' };
   }
 
   const mrChefId = await getMrChefSlackUserId();
-  if (!mrChefId || !messageMentionsSlackUser(ev.text, mrChefId)) {
+  if (!mrChefId || !messageMentionsSlackUser(messageText, mrChefId)) {
     return { statusCode: 200, body: '' };
   }
 
-  await invokeCollectOrders(channel, replyTs);
-
-  if (isAfterZaloSummaryCutoffNow()) {
-    const botToken = await getBotToken();
-    if (botToken) {
-      const reconcileUid = (
-        process.env.RECONCILE_NOTIFY_SLACK_USER_ID || RECONCILE_NOTIFY_SLACK_USER_ID
-      ).trim();
-      const ping = reconcileUid ? `<@${reconcileUid}> ` : '';
-      const text = `${ping}Có cập nhật đặt món sau khi đã gửi Zalo.`;
-      postSlackThreadReply(botToken, menu.channel_id, menu.message_ts, text)
-        .then(() => console.log('menu @mention after 10:45: posted reconcile ping', { user: ev.user }))
-        .catch((e) => console.warn('menu @mention after 10:45: ping failed', e?.message || e));
-    } else {
-      console.warn('menu @mention after 10:45: no bot-token for reconcile ping');
-    }
-  }
+  const afterZaloCutoff = isAfterZaloSummaryCutoffNow();
+  await invokeCollectOrders(channel, replyTs, ev.user, afterZaloCutoff, messageText);
 
   return { statusCode: 200, body: '' };
 }

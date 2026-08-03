@@ -6,7 +6,7 @@
  *   node --env-file=.env scripts/zalo/send-sheet-summary-local.mjs
  *
  * Cần AWS credentials trên máy (aws configure / AWS_PROFILE) để đọc Parameter Store.
- * Tùy chọn: TABLE_NAME=slack-dishes-menu-message để đối chiếu Slack trước khi gửi (cùng bảng Dynamo như Lambda).
+ * Tùy chọn: TABLE_NAME=slack-dishes-menu-message, DISHES_TABLE_NAME=slack-dishes-dishes-menu
  */
 
 import { readFileSync, existsSync } from 'node:fs';
@@ -46,8 +46,6 @@ function buildEnvOverrides() {
     readMaybeFile(process.env.SHEET_CREDENTIALS_JSON) || readMaybeFile(process.env.SHEET_CREDENTIALS_PATH);
   if (sheetCreds.trim()) out['sheet-credentials'] = sheetCreds.trim();
   set('dishes-sheet-name', process.env.DISHES_SHEET_NAME);
-  set('zalo-summary-range', process.env.ZALO_SUMMARY_RANGE);
-  set('zalo-summary-range-cell', process.env.ZALO_SUMMARY_RANGE_CELL);
 
   return out;
 }

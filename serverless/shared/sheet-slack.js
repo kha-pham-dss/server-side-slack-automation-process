@@ -1,4 +1,5 @@
 import { nowGmt7 } from './time-constants.js';
+import { addSlackNameMatchKeys, normalizeSlackDisplayName } from './text-transforms.js';
 
 /** Cột ghi Slack user ID trên sheet; ghi đè bằng SSM orders-slack-id-column. */
 export const DEFAULT_ORDERS_SLACK_ID_COLUMN = 'BZ';
@@ -53,7 +54,7 @@ export function slackMemberNameKeys(m) {
   const keys = new Set();
   for (const field of [m.real_name, m.profile?.real_name, m.profile?.display_name, m.name]) {
     const n = field != null ? String(field).trim() : '';
-    if (n) keys.add(normalizeSheetName(n));
+    if (n) addSlackNameMatchKeys(keys, n);
   }
   return keys;
 }
@@ -77,9 +78,10 @@ export async function resolveSlackUserProfiles(botToken) {
 
     for (const m of data.members ?? []) {
       if (!m.id || m.is_bot || m.deleted) continue;
-      userIdToNameKeys[m.id] = slackMemberNameKeys(m);
-      userIdToName[m.id] =
+      const rawName =
         m.real_name?.trim() || m.profile?.display_name?.trim() || m.name || m.id;
+      userIdToNameKeys[m.id] = slackMemberNameKeys(m);
+      userIdToName[m.id] = normalizeSlackDisplayName(rawName);
     }
     cursor = data.response_metadata?.next_cursor || '';
   } while (cursor);

@@ -1,30 +1,26 @@
 /**
- * Read non-empty lines from a sheet column range and send as one Zalo group message.
- * Before Zalo send: reactions.get on today's menu (DynamoDB + bot-token), compare counts to sheet text.
- * If TABLE_NAME is set and there is no menu row for today (e.g. post-menu skipped on "Bỏ qua hôm nay"),
- * skips sheet read and Zalo send entirely.
+ * Zalo sheet summary: 11:00 GMT+7 — tổng hợp đơn từ Slack reactions, ghi sheet (S62 + giá/user), gửi Zalo.
+ * Tin gửi Zalo lấy trực tiếp từ biến in-memory (aggregateOrderSummaryFromReactions), không đọc lại sheet.
  */
 
 import { DynamoDBClient, GetItemCommand } from '@aws-sdk/client-dynamodb';
 import { unmarshall } from '@aws-sdk/util-dynamodb';
-import { google } from 'googleapis';
 import { Zalo, ThreadType } from 'zca-js';
 import { dateKeyGmt7 } from '@slack-dishes/shared/time-constants.js';
-import { getDishesSheetNameForCurrentMonth } from '@slack-dishes/shared/sheet-slack.js';
+import {
+  getSheetsClient,
+  aggregateOrderSummaryFromReactions,
+  persistOrdersToSheet,
+  ensureCurrentMonthSheet,
+} from '@slack-dishes/shared';
 
-/** TODO: set false trước khi deploy — tạm thời chỉ log, không gửi Zalo. */
+/** Ngày đầu vendor mới: manual gửi Zalo; set false sau khi ổn định. */
 const ZALO_SEND_DISABLED = false;
 
-
-/** @mention trong reply thread menu khi đối chiếu lệch. Ghi đè: RECONCILE_NOTIFY_SLACK_USER_ID. */
-const RECONCILE_NOTIFY_SLACK_USER_ID = 'U02SJRNAM2M';
-
-/** Slack emoji names :one:..:six: (cùng post-menu / collect-orders). */
-const DIGIT_EMOJI = ['one', 'two', 'three', 'four', 'five', 'six'];
+const NO_ORDERS_MSG = 'Nay bọn em không đặt gì anh nhé';
 
 const dynamo = new DynamoDBClient();
 
-/** Cùng khóa ngày với post-menu / collect-orders (GMT+7 YYYY-MM-DD). */
 function dateKey() {
   return dateKeyGmt7();
 }
@@ -41,428 +37,102 @@ async function getTodayMenuRow(tableName) {
   return unmarshall(res.Item);
 }
 
-async function getSlackBotUserId(botToken) {
-  const res = await fetch('https://slack.com/api/auth.test', {
-    headers: { Authorization: `Bearer ${botToken}` },
-  });
-  const data = await res.json();
-  if (!data.ok) return null;
-  return data.user_id ?? null;
-}
-
 /**
- * Tổng reaction món: :one:..:six: (mỗi user đếm 1), không bot, không :up:.
- * Tổng :up: (không bot) — so với số suất 40k trên sheet.
- */
-async function slackDishAndUpCounts(botToken, channelId, messageTs) {
-  const url = new URL('https://slack.com/api/reactions.get');
-  url.searchParams.set('channel', channelId);
-  url.searchParams.set('timestamp', messageTs);
-  const res = await fetch(url.toString(), {
-    headers: { Authorization: `Bearer ${botToken}` },
-  });
-  const data = await res.json();
-  if (!data.ok) throw new Error(`Slack reactions.get: ${data.error ?? res.status}`);
-
-  const botUserId = await getSlackBotUserId(botToken);
-  const excludeBot = (ids) => (botUserId ? ids.filter((id) => id !== botUserId) : ids);
-
-  let dishReactions = 0;
-  let upReactions = 0;
-  for (const r of data.message?.reactions ?? []) {
-    const name = r.name;
-    if (typeof name !== 'string') continue;
-    const users = excludeBot(r.users ?? []);
-    if (name === 'up') {
-      upReactions += users.length;
-      continue;
-    }
-    if (DIGIT_EMOJI.includes(name)) dishReactions += users.length;
-  }
-  return { dishReactions, upReactions };
-}
-
-function getSheetsClient(credentialsJson) {
-  const cred = JSON.parse(credentialsJson);
-  const auth = new google.auth.GoogleAuth({
-    credentials: cred,
-    scopes: ['https://www.googleapis.com/auth/spreadsheets'],
-  });
-  return google.sheets({ version: 'v4', auth });
-}
-
-function normCellText(s) {
-  return String(s ?? '')
-    .normalize('NFC')
-    .replace(/\u00a0/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-/** Bỏ dấu tiếng Việt — so khớp "Tổng"/"Tong", "suất"/"suat". */
-function foldVi(s) {
-  return normCellText(s)
-    .normalize('NFD')
-    .replace(/\p{M}/gu, '')
-    .toLowerCase();
-}
-
-function looksLikeTotalLine(s) {
-  const f = foldVi(s);
-  return f.includes('tong') && f.includes('suat');
-}
-
-/**
- * Lấy số suất từ một dòng Tổng. Hỗ trợ:
- * - Tổng 11 suất / Tổng: 11 suất
- * - Tổng suất: 11 / Tổng suất 11
- * - Tổng: 11 (không có chữ suất sau số)
- */
-export function extractTotalServingsFromLine(line) {
-  const t = normCellText(line);
-  if (!looksLikeTotalLine(t) && !foldVi(t).includes('tong')) return null;
-
-  const patterns = [
-    /tổng[^0-9\n]{0,32}(\d+)\s*suất/i,
-    /tổng\s*suất\s*:?\s*(\d+)/i,
-    /suất\s*:?\s*(\d+)/i,
-    /tổng\s*:?\s*(\d+)/i,
-  ];
-  for (const re of patterns) {
-    const m = t.match(re);
-    if (m) return parseInt(m[1], 10);
-  }
-
-  const beforeSuat = t.match(/(\d+)\s*suất/i);
-  if (beforeSuat) return parseInt(beforeSuat[1], 10);
-
-  const nums = [...t.matchAll(/(\d+)/g)].map((x) => parseInt(x[1], 10)).filter((n) => Number.isFinite(n));
-  if (nums.length) return nums[0];
-  return null;
-}
-
-function quoteSheetTabName(sheetName) {
-  return /[\s']/.test(sheetName) ? `'${sheetName.replace(/'/g, "''")}'` : sheetName;
-}
-
-/**
- * Một lần values.get theo range (vd. M61:M81 từ F70 / zalo-summary-range).
- *
- * @param {import('googleapis').sheets_v4.Sheets} sheets
- * @param {string} spreadsheetId
- * @param {string} sheetName
- * @param {string} a1Range e.g. M61:M81
- * @returns {string[]} non-empty trimmed lines in row order
- */
-export async function fetchNonEmptyLinesFromRange(sheets, spreadsheetId, sheetName, a1Range) {
-  const quoted = quoteSheetTabName(sheetName);
-  const norm = normalizeRangeCandidate(a1Range);
-  const res = await sheets.spreadsheets.values.get({
-    spreadsheetId,
-    range: `${quoted}!${norm}`,
-    majorDimension: 'ROWS',
-    valueRenderOption: 'FORMATTED_VALUE',
-  });
-
-  console.log(
-    'Zalo sheet summary: requested',
-    norm,
-    '| API returned:',
-    res.data.range ?? '—',
-    '| rows:',
-    res.data.values?.length ?? 0
-  );
-
-  /** @type {string[]} */
-  const lines = [];
-  for (const row of res.data.values || []) {
-    const s = row?.[0] != null ? normCellText(row[0]) : '';
-    if (s) lines.push(s);
-  }
-
-  const hasTotal = lines.some((l) => looksLikeTotalLine(l));
-  console.log(
-    'Zalo sheet summary:',
-    a1Range,
-    `→ ${lines.length} line(s)`,
-    hasTotal ? '(có dòng Tổng)' : '(chưa thấy dòng Tổng)'
-  );
-  return lines;
-}
-
-/**
- * Read one config cell from the same sheet tab.
- * Useful for dynamic ranges like storing "M62:M82" in F70.
- *
- * @param {import('googleapis').sheets_v4.Sheets} sheets
- * @param {string} spreadsheetId
- * @param {string} sheetName
- * @param {string} configCell e.g. F70
- * @returns {Promise<string>} trimmed cell text or empty
- */
-export async function fetchSingleCellText(sheets, spreadsheetId, sheetName, configCell) {
-  const quoted = quoteSheetTabName(sheetName);
-  const res = await sheets.spreadsheets.values.get({
-    spreadsheetId,
-    range: `${quoted}!${configCell}`,
-    majorDimension: 'ROWS',
-    valueRenderOption: 'FORMATTED_VALUE',
-  });
-  const value = res.data.values?.[0]?.[0];
-  return value != null ? normCellText(value) : '';
-}
-
-function normalizeRangeCandidate(raw) {
-  const s = (raw || '').trim();
-  if (!s) return '';
-  const bang = s.lastIndexOf('!');
-  const candidate = bang >= 0 ? s.slice(bang + 1) : s;
-  return candidate.replace(/\s+/g, '').trim();
-}
-
-/** Single A1 cell ref (F70), not a column range. */
-function looksLikeSingleCellRef(raw) {
-  return /^[A-Za-z]{1,3}[1-9]\d*$/.test(normalizeRangeCandidate(raw));
-}
-
-function looksLikeSingleColumnRange(raw) {
-  return /^[A-Za-z]+[1-9]\d*:[A-Za-z]+[1-9]\d*$/.test(normalizeRangeCandidate(raw));
-}
-
-/**
- * Resolve content range: read config cell (default F70) for text like M64:M84, then read that range.
- * Never treat a single cell (e.g. F70) as the content range — that would send the range string itself.
- *
  * @param {Record<string, string>} config
- * @param {import('googleapis').sheets_v4.Sheets} sheets
- * @param {string} spreadsheetId
- * @param {string} sheetName
- * @returns {Promise<string>}
- */
-export async function resolveSummaryCellRange(config, sheets, spreadsheetId, sheetName) {
-  const staticFallback = (config['zalo-summary-range'] || 'M58:M72').trim();
-  let configCell = (config['zalo-summary-range-cell'] || 'F70').trim();
-
-  // Legacy: user put F70 in zalo-summary-range instead of zalo-summary-range-cell.
-  if (looksLikeSingleCellRef(staticFallback) && !config['zalo-summary-range-cell']?.trim()) {
-    configCell = staticFallback;
-  }
-
-  if (configCell && looksLikeSingleCellRef(configCell)) {
-    try {
-      const dynamicRaw = await fetchSingleCellText(sheets, spreadsheetId, sheetName, configCell);
-      const dynamicRange = normalizeRangeCandidate(dynamicRaw);
-      if (looksLikeSingleColumnRange(dynamicRange)) {
-        console.log('Zalo sheet summary: content range', dynamicRange, 'from cell', configCell);
-        return dynamicRange;
-      }
-      if (dynamicRaw) {
-        console.warn(
-          'Zalo sheet summary: cell',
-          configCell,
-          'is not a column range:',
-          dynamicRaw
-        );
-      } else {
-        console.warn('Zalo sheet summary: cell', configCell, 'is empty');
-      }
-    } catch (e) {
-      console.warn(
-        'Zalo sheet summary: failed reading config cell',
-        configCell,
-        e?.message || e
-      );
-    }
-  }
-
-  if (looksLikeSingleColumnRange(staticFallback)) {
-    console.log('Zalo sheet summary: using static fallback range', staticFallback);
-    return normalizeRangeCandidate(staticFallback);
-  }
-
-  if (looksLikeSingleCellRef(staticFallback)) {
-    console.warn(
-      'Zalo sheet summary: zalo-summary-range is a cell ref',
-      staticFallback,
-      'but could not resolve — check F70 formula and zalo-summary-range-cell'
-    );
-  }
-
-  return 'M58:M72';
-}
-
-/** Số suất từ dòng "Tổng …" cuối cùng trong snippet (hoặc dòng Tổng duy nhất). */
-export function parseTotalServings(lines) {
-  let last = null;
-  let lastIdx = -1;
-  for (let i = 0; i < lines.length; i++) {
-    const n = extractTotalServingsFromLine(lines[i]);
-    if (n != null) {
-      last = n;
-      lastIdx = i;
-    }
-  }
-  if (last != null) {
-    console.log('Zalo parseTotalServings:', last, 'from line', JSON.stringify(lines[lastIdx]));
-  } else {
-    const candidates = lines.filter((l) => looksLikeTotalLine(l));
-    if (candidates.length) {
-      console.warn('Zalo parseTotalServings: có dòng Tổng nhưng không đọc được số:', candidates);
-    }
-  }
-  return last;
-}
-
-/**
- * Cộng mọi cụm "x 40k" (có khoảng trắng giữa số và 40k): `2 40k`, `10 40k`, `11 40k`, `(1 40k)`.
- * `x` là một hoặc nhiều chữ số (`\d+`). Không khớp "140k" (không có khoảng trước 40k).
- */
-export function parseFortyKPortionsFromText(text) {
-  if (!text || typeof text !== 'string') return 0;
-  const re = /(?<![0-9])(\d+)\s*40\s*k\b/gi;
-  let sum = 0;
-  let m;
-  while ((m = re.exec(text)) !== null) {
-    sum += parseInt(m[1], 10);
-  }
-  return sum;
-}
-
-/** Reply dưới tin menu hôm đó (thread). Cần chat:write. */
-async function postSlackThreadReply(botToken, channelId, threadTs, text) {
-  const res = await fetch('https://slack.com/api/chat.postMessage', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json; charset=utf-8',
-      Authorization: `Bearer ${botToken}`,
-    },
-    body: JSON.stringify({
-      channel: channelId,
-      thread_ts: threadTs,
-      text,
-    }),
-  });
-  const data = await res.json();
-  if (!data.ok) throw new Error(`Slack chat.postMessage: ${data.error ?? res.status}`);
-}
-
-/**
- * @param {Record<string, unknown>} reconcile output of reconcileSlackVsSheet (có slack_menu)
- */
-async function notifyReconcileMismatchOnSlack(botToken, reconcile) {
-  const menu = reconcile.slack_menu;
-  if (!menu?.channel_id || !menu?.message_ts) return;
-
-  const uid = (process.env.RECONCILE_NOTIFY_SLACK_USER_ID || RECONCILE_NOTIFY_SLACK_USER_ID).trim();
-  const mention = uid ? `<@${uid}> ` : '';
-
-  const text = [
-    `${mention} Có chênh lệch giữa reactions và số món ghi nhận.`,
-    `Slack: suất (emoji) ${reconcile.slack_dish_reactions}, :up: ${reconcile.slack_up_reactions}.`,
-    `Sheet: Tổng ${reconcile.sheet_total_servings ?? '—'}, 40k ${reconcile.sheet_40k_portions}.`,
-  ].join(' ');
-
-  try {
-    await postSlackThreadReply(botToken, menu.channel_id, menu.message_ts, text);
-    console.log('Zalo reconcile: posted Slack thread reply under menu', menu.message_ts);
-  } catch (e) {
-    console.warn('Zalo reconcile: Slack thread reply failed', e?.message || e);
-  }
-}
-
-/**
- * So khớp Slack vs sheet trước khi gửi Zalo.
- * @returns {Promise<Record<string, unknown>>}
- */
-async function reconcileSlackVsSheet(config, lines, bodyForParse) {
-  const tableName = (process.env.TABLE_NAME || '').trim();
-  const botToken = (config['bot-token'] || '').trim();
-  if (!tableName) {
-    return { skipped: true, reason: 'no_table_name' };
-  }
-  if (!botToken) {
-    return { skipped: true, reason: 'no_bot_token' };
-  }
-
-  let menu;
-  try {
-    menu = await getTodayMenuRow(tableName);
-  } catch (e) {
-    console.warn('Zalo reconcile: DynamoDB read failed', e?.message || e);
-    return { skipped: true, reason: 'dynamo_error', error: String(e?.message || e) };
-  }
-  if (!menu?.channel_id || !menu?.message_ts) {
-    return { skipped: true, reason: 'no_menu_row' };
-  }
-
-  let slackDish;
-  let slackUp;
-  try {
-    const c = await slackDishAndUpCounts(botToken, menu.channel_id, menu.message_ts);
-    slackDish = c.dishReactions;
-    slackUp = c.upReactions;
-  } catch (e) {
-    console.warn('Zalo reconcile: Slack reactions.get failed', e?.message || e);
-    return { skipped: true, reason: 'slack_reactions_error', error: String(e?.message || e) };
-  }
-
-  const sheetTotal = parseTotalServings(lines);
-  const sheet40k = parseFortyKPortionsFromText(bodyForParse || '');
-
-  // Chỉ so Tổng khi parse được số từ dòng Tổng (tránh coi thiếu parse = 0 suất)
-  const comparedTotal = sheetTotal != null && lines.some((l) => looksLikeTotalLine(l));
-  const totalMatch = !comparedTotal || slackDish === sheetTotal;
-  const upMatch = slackUp === sheet40k;
-
-  const out = {
-    skipped: false,
-    slack_dish_reactions: slackDish,
-    slack_up_reactions: slackUp,
-    sheet_total_servings: sheetTotal,
-    sheet_40k_portions: sheet40k,
-    total_compared: comparedTotal,
-    total_match: totalMatch,
-    up_match: upMatch,
-  };
-
-  if (comparedTotal && !totalMatch) {
-    console.warn(
-      'Zalo reconcile: suất từ Slack (emoji món, không :up:)',
-      slackDish,
-      '≠ sheet Tổng … suất',
-      sheetTotal
-    );
-  }
-  if (!upMatch) {
-    console.warn('Zalo reconcile: :up: Slack (trừ bot)', slackUp, '≠ suất 40k trên sheet', sheet40k);
-  }
-
-  out.notify_mismatch =
-    (comparedTotal && !totalMatch) || !upMatch ? { total: comparedTotal && !totalMatch, up: !upMatch } : null;
-
-  out.slack_menu = { channel_id: menu.channel_id, message_ts: menu.message_ts };
-
-  return out;
-}
-
-/**
- * @param {Record<string, string>} config keys like collect-orders SSM map (kebab-case)
  * @returns {Promise<{ ok?: true; skipped?: true; reason?: string }>}
  */
 export async function runFromConfig(config) {
   const tableName = (process.env.TABLE_NAME || '').trim();
+  const dishesTableName = (process.env.DISHES_TABLE_NAME || '').trim();
+  const orderOverridesTableName = (process.env.ORDER_OVERRIDES_TABLE_NAME || '').trim();
+  const botToken = (config['bot-token'] || '').trim();
+  const sheetId = (config['sheet-id'] || config['sheet_id'] || '').trim();
+  const credentials = (config['sheet-credentials'] || config['sheet_credentials'] || '').trim();
+
+  if (!sheetId || !credentials) {
+    console.warn('Zalo sheet summary: missing sheet-id or sheet-credentials');
+    return { skipped: true, reason: 'missing_sheet_config' };
+  }
+  if (!botToken) {
+    console.warn('Zalo sheet summary: missing bot-token');
+    return { skipped: true, reason: 'no_bot_token' };
+  }
+  if (!dishesTableName) {
+    console.warn('Zalo sheet summary: DISHES_TABLE_NAME not set');
+    return { skipped: true, reason: 'no_dishes_table_name' };
+  }
+
+  let menu = null;
   if (tableName) {
     try {
-      const menu = await getTodayMenuRow(tableName);
+      menu = await getTodayMenuRow(tableName);
       if (!menu) {
-        console.log(
-          'Zalo sheet summary: no menu row for today in DynamoDB; skip sheet + Zalo (e.g. Bỏ qua hôm nay)'
-        );
+        console.log('Zalo sheet summary: no menu row for today; skip');
         return { skipped: true, reason: 'no_menu_today' };
       }
     } catch (e) {
-      console.warn('Zalo sheet summary: DynamoDB menu lookup failed; continuing', e?.message || e);
+      console.warn('Zalo sheet summary: DynamoDB menu lookup failed', e?.message || e);
+      return { skipped: true, reason: 'dynamo_error' };
     }
+  } else {
+    console.warn('Zalo sheet summary: TABLE_NAME not set');
+    return { skipped: true, reason: 'no_table_name' };
+  }
+
+  const sheets = getSheetsClient(credentials);
+  const ensured = await ensureCurrentMonthSheet({ sheets, spreadsheetId: sheetId, config });
+  const sheetName = ensured.sheetName;
+  if (ensured.created) {
+    console.log('Zalo sheet summary: created month sheet', ensured);
+  }
+
+  const agg = await aggregateOrderSummaryFromReactions({
+    config,
+    sheets,
+    sheetId,
+    sheetName,
+    channelId: menu.channel_id,
+    messageTs: menu.message_ts,
+    botToken,
+    dynamo,
+    dishesTableName,
+    orderOverridesTableName,
+  });
+
+  const orderCount = Object.entries(agg.ordersByUserId).filter(([uid, o]) => {
+    const ov = agg.overridesByUserId?.[uid];
+    return o.dishIndices?.length || (ov && Object.keys(ov).length);
+  }).length;
+  const noOrders = orderCount === 0;
+  /** Tin Zalo: build trên Lambda, không đọc từ sheet. */
+  const zaloMessage = noOrders ? NO_ORDERS_MSG : agg.summaryText;
+
+  await persistOrdersToSheet({
+    config,
+    sheets,
+    sheetId,
+    sheetName,
+    ordersByUserId: agg.ordersByUserId,
+    userIdToNameKeys: agg.userIdToNameKeys,
+    userIdToName: agg.userIdToName,
+    summaryText: zaloMessage,
+    zaloCell: agg.zaloCell,
+    dishes: agg.dishes,
+    overridesByUserId: agg.overridesByUserId,
+  });
+
+  if (ZALO_SEND_DISABLED) {
+    console.log(
+      `Zalo sheet summary [dry-run] cell=${agg.zaloCell} orders=${orderCount} msg=${JSON.stringify(zaloMessage)}`
+    );
+    return {
+      ok: true,
+      dry_run: true,
+      zalo_cell: agg.zaloCell,
+      order_count: orderCount,
+      no_orders: noOrders,
+      msg: zaloMessage,
+    };
   }
 
   const groupId = (config['zalo-group-id'] || '').trim();
@@ -470,89 +140,15 @@ export async function runFromConfig(config) {
   const imei = (config['zalo-imei'] || '').trim();
   const userAgent = (config['zalo-user-agent'] || '').trim();
 
-  if (
-    !ZALO_SEND_DISABLED &&
-    (!groupId || !cookiesRaw || !imei || !userAgent)
-  ) {
-    console.warn('Zalo sheet summary: missing zalo-group-id, zalo-cookies-json, zalo-imei, or zalo-user-agent');
-    return { skipped: true, reason: 'incomplete_zalo_or_sheet_config' };
-  }
-
-  const sheetId = (config['sheet-id'] || config['sheet_id'] || '').trim();
-  const credentials = (config['sheet-credentials'] || config['sheet_credentials'] || '').trim();
-  if (!sheetId || !credentials) {
-    const hint = Object.keys(config)
-      .filter((k) => k.toLowerCase().includes('sheet'))
-      .sort()
-      .join(', ');
-    console.warn(
-      'Zalo sheet summary: missing sheet-id or sheet-credentials (SSM names must be kebab-case). Keys containing "sheet":',
-      hint || '(none)'
-    );
-    return { skipped: true, reason: 'missing_sheet_config' };
-  }
-
-  const sheetName = (config['dishes-sheet-name'] || '').trim() || getDishesSheetNameForCurrentMonth();
-
-  const sheets = getSheetsClient(credentials);
-  const cellRange = await resolveSummaryCellRange(config, sheets, sheetId, sheetName);
-
-  const lines = await fetchNonEmptyLinesFromRange(sheets, sheetId, sheetName, cellRange);
-  const body = lines.join('\n').trim();
-  const totalServings = parseTotalServings(lines);
-  const hasDishLines = lines.some((l) => !looksLikeTotalLine(l));
-  const noOrdersMsg = 'Nay bọn em không đặt gì anh nhé';
-
-  let msg;
-  let noOrders = false;
-  if (totalServings === 0 && !hasDishLines) {
-    msg = noOrdersMsg;
-    noOrders = true;
-    console.log('Zalo sheet summary: Tổng 0 suất — sending no-order message');
-  } else if (body) {
-    if (lines.length === 1 && looksLikeSingleColumnRange(lines[0])) {
-      console.warn(
-        'Zalo sheet summary: content looks like unresolved range text',
-        lines[0],
-        '— check zalo-summary-range-cell (F70) and formula'
-      );
-      return { skipped: true, reason: 'range_not_resolved' };
-    }
-    msg = body;
-  } else {
-    console.warn('Zalo sheet summary: no text in', cellRange, 'and no Tổng … suất line');
-    return { skipped: true, reason: 'empty_range' };
-  }
-
-  const reconcile = await reconcileSlackVsSheet(config, lines, body);
-  if (!reconcile.skipped) {
-    console.log('Zalo reconcile:', JSON.stringify(reconcile));
-  }
-  if (!reconcile.skipped && reconcile.notify_mismatch && config['bot-token']?.trim()) {
-    await notifyReconcileMismatchOnSlack(config['bot-token'].trim(), reconcile);
-  }
-
-  if (ZALO_SEND_DISABLED) {
-    console.log(
-      `Zalo sheet summary [dry-run] range=${cellRange} lines=${lines.length} msg=${JSON.stringify(msg)}`
-    );
-    return {
-      ok: true,
-      dry_run: true,
-      range: cellRange,
-      line_count: lines.length,
-      no_orders: noOrders,
-      total_servings: totalServings,
-      msg,
-      slack_reconcile: reconcile,
-    };
+  if (!groupId || !cookiesRaw || !imei || !userAgent) {
+    console.warn('Zalo sheet summary: missing Zalo credentials');
+    return { skipped: true, reason: 'incomplete_zalo_config' };
   }
 
   let cookie;
   try {
     cookie = JSON.parse(cookiesRaw);
   } catch {
-    console.warn('Zalo sheet summary: zalo-cookies-json is not valid JSON');
     return { skipped: true, reason: 'invalid_cookies_json' };
   }
 
@@ -564,17 +160,19 @@ export async function runFromConfig(config) {
     language: (config['zalo-language'] || 'vi').trim() || 'vi',
   });
 
-  await api.sendMessage({ msg }, groupId, ThreadType.Group);
+  await api.sendMessage({ msg: zaloMessage }, groupId, ThreadType.Group);
   console.log(
     'Zalo sheet summary: sent to group',
     groupId,
-    noOrders ? '(Tổng 0 suất)' : `${lines.length} lines`
+    noOrders ? '(no orders)' : `${orderCount} orders`,
+    '(from lambda aggregate, not sheet)'
   );
+
   return {
     ok: true,
-    line_count: lines.length,
+    zalo_cell: agg.zaloCell,
+    order_count: orderCount,
     no_orders: noOrders,
-    total_servings: totalServings,
-    slack_reconcile: reconcile,
+    msg: zaloMessage,
   };
 }

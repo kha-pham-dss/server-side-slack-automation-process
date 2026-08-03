@@ -6,6 +6,21 @@
   "exports": {
     ".": "./index.js",
     "./time-constants.js": "./time-constants.js",
-    "./sheet-slack.js": "./sheet-slack.js"
+    "./sheet-slack.js": "./sheet-slack.js",
+    "./sheets.js": "./sheets.js",
+    "./meal-constants.js": "./meal-constants.js",
+    "./orders.js": "./orders.js",
+    "./dynamo-dishes.js": "./dynamo-dishes.js",
+    "./dynamo-menu.js": "./dynamo-menu.js",
+    "./dynamo-order-overrides.js": "./dynamo-order-overrides.js",
+    "./order-qty.js": "./order-qty.js",
+    "./ensure-month-sheet.js": "./ensure-month-sheet.js",
+    "./menu-slack.js": "./menu-slack.js",
+    "./menu-dm.js": "./menu-dm.js",
+    "./text-transforms.js": "./text-transforms.js",
+    "./zalo-message.js": "./zalo-message.js",
+    "./ssm-config.js": "./ssm-config.js",
+    "./post-command.js": "./post-command.js",
+    "./control-channel-post-job.js": "./control-channel-post-job.js"
   }
 }

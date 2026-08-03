@@ -1,5 +1,5 @@
 /**
- * Lambda: 10:45 GMT+7 Mon–Fri — đọc ô sheet (mặc định M58:M72), bỏ dòng trống, gửi một tin Zalo nhóm.
+ * Zalo sheet summary: 11:00 GMT+7 — tổng hợp đơn từ Slack reactions, ghi S62, gửi Zalo.
  */
 
 import { SSMClient, GetParametersByPathCommand } from '@aws-sdk/client-ssm';

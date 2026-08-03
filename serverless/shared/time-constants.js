@@ -12,23 +12,82 @@ export const CACHE_TTL_MS = 60_000;
 export const POST_MENU_HOUR_GMT7 = 9;
 export const POST_MENU_MINUTE_GMT7 = 30;
 
-/** Mon–Fri 10:20 GMT+7 — EventBridge: cron(20 3 ? * MON-FRI *) */
-export const COLLECT_ORDERS_HOUR_GMT7 = 10;
-export const COLLECT_ORDERS_MINUTE_GMT7 = 20;
+/** Mon–Fri 11:00 GMT+7 — EventBridge: cron(0 4 ? * MON-FRI *) */
+export const ZALO_SUMMARY_HOUR_GMT7 = 11;
+export const ZALO_SUMMARY_MINUTE_GMT7 = 0;
 
-/** Mon–Fri 10:45 GMT+7 — EventBridge: cron(45 3 ? * MON-FRI *) */
-export const ZALO_SUMMARY_HOUR_GMT7 = 10;
-export const ZALO_SUMMARY_MINUTE_GMT7 = 45;
-
-/** Ngưỡng "sau Zalo summary" (slack-events ping reconcile). */
+/** Ngưỡng "sau Zalo summary" (slack-events → collect-orders reconcile). */
 export const ZALO_SUMMARY_CUTOFF_HOUR_GMT7 = ZALO_SUMMARY_HOUR_GMT7;
 export const ZALO_SUMMARY_CUTOFF_MINUTE_GMT7 = ZALO_SUMMARY_MINUTE_GMT7;
+
+/** @deprecated Không còn schedule; giữ để tham chiếu nếu cần invoke thủ công. */
+export const COLLECT_ORDERS_HOUR_GMT7 = 10;
+export const COLLECT_ORDERS_MINUTE_GMT7 = 55;
 
 /** Slack request signature: timestamp lệch tối đa (giây). */
 export const SLACK_SIGNATURE_MAX_AGE_SEC = 5 * 60;
 
 /** Delay giữa các reaction emoji khi post menu (ms). */
 export const POST_MENU_REACTION_DELAY_MS = 1_000;
+
+/**
+ * Poll ảnh Zalo group: bắt đầu sau POST_MENU + offset, dừng trước ZALO_SUMMARY.
+ * EventBridge: cron rộng `cron(5/10 2-3 ? * MON-FRI *)` (UTC); Lambda tự gate theo các hằng số dưới.
+ * Đổi POST_MENU_HOUR_GMT7 (vd. 9h) → cập nhật thêm cron PostMenu trong iac/template.yaml.
+ */
+export const ZALO_MENU_IMAGE_POLL_OFFSET_MINUTES_GMT7 = 5;
+export const ZALO_MENU_IMAGE_POLL_INTERVAL_MINUTES = 10;
+
+/** @deprecated dùng getZaloMenuImagePollStartMinutesGmt7() */
+export const ZALO_MENU_IMAGE_POLL_START_MINUTE_GMT7 = ZALO_MENU_IMAGE_POLL_OFFSET_MINUTES_GMT7;
+/** @deprecated dùng getZaloMenuImagePollEndMinutesGmt7() */
+export const ZALO_MENU_IMAGE_POLL_END_MINUTE_GMT7 = 55;
+
+function gmt7ClockToMinutes(hourGMT7, minuteGMT7) {
+  return hourGMT7 * 60 + minuteGMT7;
+}
+
+/** Phút GMT+7 trong ngày — lần poll đầu (sau khi post menu). */
+export function getZaloMenuImagePollStartMinutesGmt7() {
+  return gmt7ClockToMinutes(POST_MENU_HOUR_GMT7, POST_MENU_MINUTE_GMT7) + ZALO_MENU_IMAGE_POLL_OFFSET_MINUTES_GMT7;
+}
+
+/** Phút GMT+7 trong ngày — hết cửa sổ poll (trước Zalo summary, exclusive). */
+export function getZaloMenuImagePollEndMinutesGmt7() {
+  return gmt7ClockToMinutes(ZALO_SUMMARY_HOUR_GMT7, ZALO_SUMMARY_MINUTE_GMT7);
+}
+
+/** Schedule EventBridge: có đang trong khung post menu → trước gửi tổng suất Zalo? */
+export function isWithinZaloMenuImagePollWindow(now = new Date()) {
+  const gmt7 = nowGmt7(now);
+  const nowMinutes = gmt7.getUTCHours() * 60 + gmt7.getUTCMinutes();
+  return (
+    nowMinutes >= getZaloMenuImagePollStartMinutesGmt7() &&
+    nowMinutes < getZaloMenuImagePollEndMinutesGmt7()
+  );
+}
+
+/** DynamoDB TTL — số ngày giữ bản ghi sau ngày menu (GMT+7); hết hạn lúc 00:00 GMT+7 ngày date + N. */
+export const DYNAMO_TTL_DISHES_MENU_DAYS = 30;
+export const DYNAMO_TTL_MENU_MESSAGE_DAYS = 7;
+export const DYNAMO_TTL_ORDER_OVERRIDES_DAYS = 7;
+
+/** @deprecated dùng hằng số theo từng bảng */
+export const DYNAMO_TTL_RETENTION_DAYS = DYNAMO_TTL_DISHES_MENU_DAYS;
+
+/**
+ * Unix epoch (giây) cho DynamoDB TTL — xóa sau retentionDays kể từ dateKey.
+ * @param {string} dateKey YYYY-MM-DD (GMT+7)
+ * @param {number} retentionDays
+ */
+export function dynamoTtlFromDateKey(dateKey, retentionDays = DYNAMO_TTL_DISHES_MENU_DAYS) {
+  const [year, month, day] = String(dateKey).split('-').map(Number);
+  if (!year || !month || !day) {
+    throw new Error(`Invalid dateKey for TTL: ${dateKey}`);
+  }
+  const expireMs = Date.UTC(year, month - 1, day + retentionDays) - GMT7_OFFSET_MS;
+  return Math.floor(expireMs / 1000);
+}
 
 export function nowGmt7(now = new Date()) {
   return new Date(now.getTime() + GMT7_OFFSET_MS);
