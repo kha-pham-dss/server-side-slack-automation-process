@@ -3,6 +3,7 @@ node_modules/
 .aws-sam/
 *.zip
 .DS_Store
+google-apps-script
 
 # Local secrets (never commit)
 .env

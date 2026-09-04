@@ -31,3 +31,15 @@ export function slackEventMessageText(ev) {
     .join('\n');
   return fromBlocks || '';
 }
+
+/**
+ * Slack Events retries when the HTTP handler is slow (cold start + post).
+ * Claim the control-message ack reaction first; already_reacted → another delivery won.
+ * @param {{ ok?: boolean, error?: string } | null | undefined} data
+ * @returns {'claimed' | 'already_claimed' | 'unavailable'}
+ */
+export function interpretAckReactionClaim(data) {
+  if (data?.ok) return 'claimed';
+  if (data?.error === 'already_reacted') return 'already_claimed';
+  return 'unavailable';
+}

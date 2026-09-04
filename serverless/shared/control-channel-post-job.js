@@ -1,5 +1,5 @@
 import { loadConfigFromParameterStore } from './ssm-config.js';
-import { parsePostCommandBody } from './post-command.js';
+import { interpretAckReactionClaim, parsePostCommandBody } from './post-command.js';
 
 async function chatPostMessage(botToken, channelId, text) {
   const res = await fetch('https://slack.com/api/chat.postMessage', {
@@ -15,7 +15,7 @@ async function chatPostMessage(botToken, channelId, text) {
   return data;
 }
 
-async function addReaction(botToken, channelId, ts, name = 'white_check_mark') {
+async function tryClaimAckReaction(botToken, channelId, ts, name = 'white_check_mark') {
   const res = await fetch('https://slack.com/api/reactions.add', {
     method: 'POST',
     headers: {
@@ -25,9 +25,11 @@ async function addReaction(botToken, channelId, ts, name = 'white_check_mark') {
     body: JSON.stringify({ channel: channelId, timestamp: ts, name }),
   });
   const data = await res.json();
-  if (!data.ok && data.error !== 'already_reacted') {
+  const claim = interpretAckReactionClaim(data);
+  if (claim === 'unavailable') {
     console.warn('control-channel-post: reactions.add failed', data.error);
   }
+  return claim;
 }
 
 /**
@@ -52,11 +54,20 @@ export async function runControlChannelPost(input) {
   if (!botToken) throw new Error('missing bot-token');
   if (!targetChannelId) throw new Error('missing channel-id');
 
-  await chatPostMessage(botToken, targetChannelId, body);
-
+  // Claim before post so Slack Event retries cannot double-post.
   if (ackMessageTs && controlChannelId) {
-    await addReaction(botToken, controlChannelId, ackMessageTs);
+    const claim = await tryClaimAckReaction(botToken, controlChannelId, ackMessageTs);
+    if (claim === 'already_claimed') {
+      console.log('control-channel-post: skip duplicate delivery', {
+        userId,
+        controlChannelId,
+        ackMessageTs,
+      });
+      return { ok: true, skipped: true, reason: 'already_claimed' };
+    }
   }
+
+  await chatPostMessage(botToken, targetChannelId, body);
 
   console.log('control-channel-post: sent', {
     userId,
