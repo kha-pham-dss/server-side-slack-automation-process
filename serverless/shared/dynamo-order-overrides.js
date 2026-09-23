@@ -1,6 +1,7 @@
 import { GetItemCommand, PutItemCommand, QueryCommand } from '@aws-sdk/client-dynamodb';
 import { marshall, unmarshall } from '@aws-sdk/util-dynamodb';
 import { dateKeyGmt7, dynamoTtlFromDateKey, DYNAMO_TTL_ORDER_OVERRIDES_DAYS } from './time-constants.js';
+import { MIN_QTY_OVERRIDE, MAX_QTY_OVERRIDE } from './order-qty.js';
 
 /**
  * @param {Record<string, unknown>} raw
@@ -13,7 +14,7 @@ function normalizeOverridesMap(raw) {
   for (const [k, v] of Object.entries(raw)) {
     const idx = Number(k);
     const qty = Number(v);
-    if (Number.isFinite(idx) && qty >= 2 && qty <= 5) out[idx] = qty;
+    if (Number.isFinite(idx) && qty >= MIN_QTY_OVERRIDE && qty <= MAX_QTY_OVERRIDE) out[idx] = qty;
   }
   return out;
 }
@@ -63,7 +64,7 @@ export async function getOrderOverridesByUserForDate(dynamo, tableName, date = d
 }
 
 /**
- * Ghi đè qty theo món (2–5) cho user trong ngày GMT+7.
+ * Ghi đè hệ số nhân theo món cho user trong ngày GMT+7.
  * @param {import('@aws-sdk/client-dynamodb').DynamoDBClient} dynamo
  * @param {string} tableName
  * @param {string} userId

@@ -1,6 +1,7 @@
 /**
  * CollectOrders Lambda — chỉ invoke từ Slack Events khi user @Mr.Chef trong thread menu hôm nay.
- * Parse `2x`–`5x` + tên món từ tin reply → lưu DynamoDB; đọc reactions + overrides → sheet + S62.
+ * Parse hệ số nhân (`2x gà rang`, `x3 gà rang`, `gà rang x4`…) từ tin reply → lưu DynamoDB;
+ * đọc reactions + overrides → sheet + S62; ping lại user nếu hệ số không khớp món đã react.
  */
 
 import { DynamoDBClient, GetItemCommand } from '@aws-sdk/client-dynamodb';
@@ -16,7 +17,11 @@ import {
   syncOrdersToSheetAndSummary,
 } from '@slack-dishes/shared/orders.js';
 import { DEFAULT_MEAL_PRICE, UPSIZE_MEAL_PRICE, formatPriceLabel } from '@slack-dishes/shared/meal-constants.js';
-import { parseQtyOverridesFromMessage } from '@slack-dishes/shared/order-qty.js';
+import {
+  parseQtyRequestsFromMessage,
+  findQtyWithoutReaction,
+  buildQtyDoubleCheckMessage,
+} from '@slack-dishes/shared/order-qty.js';
 import {
   CACHE_TTL_MS,
   dateKeyGmt7,
@@ -118,10 +123,18 @@ export async function handler(event) {
     const dateKey = dateKeyGmt7();
 
     let savedOverrides = null;
+    /** Vế có hệ số nhưng tên món không khớp menu hôm nay → nhắc user kiểm tra lại. */
+    let unknownDishFragments = [];
     if (!ORDER_OVERRIDES_TABLE_NAME) {
       console.warn('CollectOrders: ORDER_OVERRIDES_TABLE_NAME not set — skip DynamoDB qty overrides');
     } else if (triggeringUserId && messageText) {
-      const parsed = parseQtyOverridesFromMessage(messageText, dishes);
+      const requests = parseQtyRequestsFromMessage(messageText, dishes);
+      unknownDishFragments = requests.filter((r) => r.dishIndex == null).map((r) => r.fragment);
+      /** @type {Record<number, number>} */
+      const parsed = {};
+      for (const r of requests) {
+        if (r.dishIndex != null) parsed[r.dishIndex] = r.qty;
+      }
       if (Object.keys(parsed).length) {
         await mergeOrderOverridesForUser(dynamo, ORDER_OVERRIDES_TABLE_NAME, triggeringUserId, parsed, {
           date: dateKey,
@@ -139,7 +152,8 @@ export async function handler(event) {
           userId: triggeringUserId,
           messageText: messageText.slice(0, 200),
           dishNames: dishes.map((d) => d.name),
-          hint: 'Cần format 2x–5x + tên món khớp menu hôm nay (vd. 2x chả cá)',
+          unknownDishFragments,
+          hint: 'Cần hệ số nhân + tên món khớp menu hôm nay (vd. 2x chả cá, x3 chả cá, chả cá x3)',
         });
       }
     } else {
@@ -191,6 +205,32 @@ export async function handler(event) {
 
     if (event?.replyChannelId && event?.replyTs) {
       await addReactionToMessage(botToken, event.replyChannelId, event.replyTs, 'white_check_mark');
+    }
+
+    // Double-check: hệ số nhân cho món user chưa thả reaction, hoặc tên món không có trong menu.
+    if (triggeringUserId) {
+      const missingReactions = findQtyWithoutReaction(
+        syncResult.reactedByUserId?.[triggeringUserId] ?? [],
+        overridesByUserId?.[triggeringUserId] ?? {}
+      );
+      const doubleCheckText = buildQtyDoubleCheckMessage(
+        triggeringUserId,
+        missingReactions,
+        unknownDishFragments,
+        dishes
+      );
+      if (doubleCheckText) {
+        console.log('CollectOrders: qty double-check ping', {
+          userId: triggeringUserId,
+          missingReactions,
+          unknownDishFragments,
+        });
+        try {
+          await postReplyInThread(botToken, channel_id, message_ts, doubleCheckText);
+        } catch (err) {
+          console.warn('Failed to post qty double-check', triggeringUserId, err);
+        }
+      }
     }
 
     if (afterZaloCutoff && triggeringUserId) {

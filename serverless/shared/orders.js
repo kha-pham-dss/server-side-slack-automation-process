@@ -106,6 +106,24 @@ export function mergeQtyOverLimitWarnings(
   return out;
 }
 
+/**
+ * Món user đã thả reaction, KHÔNG cắt theo giới hạn suất — dùng để đối chiếu hệ số nhân.
+ * @param {Array<{ dish_index: number; user_ids: string[] }>} orders
+ * @returns {Record<string, number[]>}
+ */
+export function reactedDishIndicesByUserId(orders = []) {
+  /** @type {Record<string, number[]>} */
+  const out = {};
+  for (const o of orders) {
+    for (const uid of o.user_ids || []) {
+      if (!out[uid]) out[uid] = [];
+      if (!out[uid].includes(o.dish_index)) out[uid].push(o.dish_index);
+    }
+  }
+  for (const uid of Object.keys(out)) out[uid].sort((a, b) => a - b);
+  return out;
+}
+
 /** @param {number[]} dishIndices 0-based */
 export function formatDishNumbers(dishIndices) {
   return dishIndices.map((i) => i + 1).join('+');
@@ -337,6 +355,7 @@ export async function aggregateOrderSummaryFromReactions({
     defaultPrice,
     upPrice,
     overridesByUserId,
+    reactedByUserId: reactedDishIndicesByUserId(orders),
   };
 }
 

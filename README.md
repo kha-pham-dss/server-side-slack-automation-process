@@ -9,7 +9,7 @@ Server-side Slack dishes ordering (vendor mới): đăng thực đơn lúc **9:3
 | **Post menu** | 9:30 GMT+7 (T2–T6): đọc list món từ DM, post Block Kit lên channel, lưu DynamoDB; DM `Bỏ qua hôm nay` → skip |
 | **Menu images sync** | Ảnh reply trong thread DM → `chat.update` tin menu (event `message.im` + poll fallback) |
 | **Đặt món bằng react** | `:one:`…`:twenty:` chọn món; `:up:` upsize 35k (mặc định 30k; ≤4 / ≤5 phần) |
-| **Qty override `@Mr.Chef`** | Reply thread `2x`–`5x` + tên món → Dynamo overrides → sheet/Zalo; cảnh báo nếu vượt limit phần |
+| **Qty override `@Mr.Chef`** | Reply thread hệ số nhân (`2x`, `x3`, `… x4`, `4 suất …`) + tên món → Dynamo overrides → sheet/Zalo; cảnh báo nếu vượt limit phần hoặc món chưa được react |
 | **Collect orders** | Slack Events → ghi sheet + S62; trước 11h ✅; sau 11h ping reconcile |
 | **Zalo sheet summary** | ~11:00 GMT+7: tổng hợp từ reactions + dishes Dynamo → gửi Zalo + ghi sheet |
 | **Auto month sheet** | Ngày 1 ~00:05 GMT+7 (+ lazy khi Collect/Zalo): dup tab `Tháng N / YYYY` gần nhất, clear data đặt món trên tab mới |
@@ -108,7 +108,21 @@ Sau khi post, danh sách món lưu vào DynamoDB **`slack-dishes-dishes-menu`** 
 
 Ghi đè giá qua SSM: `orders-default-price`, `orders-upsize-price`.
 
-**Đặt món tùy số lượng:** react emoji trước, rồi reply thread `@Mr.Chef` kèm `2x`–`5x` + tên món. Một món: `@Mr.Chef 2x chả cá`. Nhiều món: `2x chả cá và 2x thịt kho` hoặc `2x chả cá, 3x thịt kho`. Bot lưu override theo ngày (DynamoDB `slack-dishes-order-overrides`) → tin Zalo/sheet hiển thị `Chả cá+Chả cá+Thịt kho+Thịt kho`.
+**Đặt món tùy số lượng:** react emoji trước, rồi reply thread `@Mr.Chef` kèm hệ số nhân + tên món.
+
+Hệ số nhận mọi cách gõ thông dụng (2–20), viết hoa/thường đều được:
+
+| Cách gõ | Ví dụ |
+| --- | --- |
+| Hệ số trước | `2x chả cá`, `x3 chả cá`, `2 x chả cá`, `x 3 chả cá` |
+| Hệ số sau | `chả cá x3`, `chả cá 3x`, `chả cá *3`, `chả cá (x3)` |
+| Đếm suất | `3 suất chả cá`, `2 phần chả cá` |
+
+Nhiều món trong một tin: ngăn bằng `và`, `,`, `;`, `+` hoặc xuống dòng — `x2 chả cá và x3 thịt kho`, `2x chả cá, 3x thịt kho`. Từ đệm (`cho em`, `nhé`, `ạ`, `với`…) được bỏ tự động.
+
+Bot lưu override theo ngày (DynamoDB `slack-dishes-order-overrides`) → tin Zalo/sheet hiển thị `2x Chả cá+3x Thịt kho`.
+
+**Double check món:** nếu bạn để hệ số cho một món mà **chưa thả reaction** cho món đó, hoặc gõ tên món không có trong menu hôm nay, bot reply ngay trong thread và tag bạn để kiểm tra lại danh sách món.
 
 **Sheet mỗi user (như cũ):** cột ngày có cặp (món, giá). Cột món = tên món `Phở+Bún+Cơm`; cột giá = `30000` hoặc `35000`.
 
@@ -168,7 +182,7 @@ Menu 9h30 → poll ảnh ~9:35–10:55. Đổi giờ menu: sửa `POST_MENU_HOUR
   - `menu-slack.js` — Block Kit menu, `chat.update`
   - `orders.js` — parse reactions, format Zalo, ghi sheet + S62
   - `ensure-month-sheet.js` — auto tạo tab `Tháng N / YYYY`
-  - `order-qty.js` — parse `2x`–`5x`, match tên món
+  - `order-qty.js` — parse hệ số nhân (mọi cách gõ), match tên món, double check món chưa react
 
 ## Deploy
 

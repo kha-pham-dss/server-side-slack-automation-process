@@ -73,6 +73,7 @@ export {
 export {
   buildOrdersByUserId,
   mergeQtyOverLimitWarnings,
+  reactedDishIndicesByUserId,
   formatDishNumbers,
   formatDishNames,
   formatOrderLine,
@@ -98,11 +99,16 @@ export {
 } from './dynamo-order-overrides.js';
 
 export {
+  MIN_QTY_OVERRIDE,
+  MAX_QTY_OVERRIDE,
   parseQtyOverridesFromMessage,
+  parseQtyRequestsFromMessage,
   matchDishIndex,
   formatDishNamesWithQtyOverrides,
   userHasOrderContent,
   totalPortions,
+  findQtyWithoutReaction,
+  buildQtyDoubleCheckMessage,
 } from './order-qty.js';
 
 export {
