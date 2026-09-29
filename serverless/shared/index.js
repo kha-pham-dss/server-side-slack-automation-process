@@ -107,6 +107,7 @@ export {
   formatDishNamesWithQtyOverrides,
   userHasOrderContent,
   totalPortions,
+  nextOverridesAfterQtyMessage,
   findQtyWithoutReaction,
   buildQtyDoubleCheckMessage,
 } from './order-qty.js';

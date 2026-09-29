@@ -208,6 +208,25 @@ export function totalPortions(dishIndices = [], qtyOverrides = {}) {
 }
 
 /**
+ * Snapshot hệ số sau một tin @Mr.Chef: tin mới thay toàn bộ overrides trong ngày (không merge).
+ * Merge cũ giữ index lệch sau khi đổi menu → cộng phần “ma” (vd. 7 món).
+ * @param {Record<number, number>} _existing unused; giữ chỗ nếu caller còn truyền
+ * @param {Record<number, number>} incoming
+ * @returns {Record<number, number>}
+ */
+export function nextOverridesAfterQtyMessage(_existing, incoming) {
+  if (!incoming || typeof incoming !== 'object') return {};
+  /** @type {Record<number, number>} */
+  const out = {};
+  for (const [k, v] of Object.entries(incoming)) {
+    const idx = Number(k);
+    const qty = Number(v);
+    if (Number.isFinite(idx) && qty >= MIN_QTY_OVERRIDE && qty <= MAX_QTY_OVERRIDE) out[idx] = qty;
+  }
+  return out;
+}
+
+/**
  * Món được nhân hệ số nhưng user chưa thả reaction → cần hỏi lại.
  * @param {number[]} dishIndices món user đã thả reaction (chưa cắt theo giới hạn)
  * @param {Record<number, number>} [qtyOverrides]

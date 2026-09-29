@@ -1,7 +1,7 @@
 import { GetItemCommand, PutItemCommand, QueryCommand } from '@aws-sdk/client-dynamodb';
 import { marshall, unmarshall } from '@aws-sdk/util-dynamodb';
 import { dateKeyGmt7, dynamoTtlFromDateKey, DYNAMO_TTL_ORDER_OVERRIDES_DAYS } from './time-constants.js';
-import { MIN_QTY_OVERRIDE, MAX_QTY_OVERRIDE } from './order-qty.js';
+import { MIN_QTY_OVERRIDE, MAX_QTY_OVERRIDE, nextOverridesAfterQtyMessage } from './order-qty.js';
 
 /**
  * @param {Record<string, unknown>} raw
@@ -64,7 +64,7 @@ export async function getOrderOverridesByUserForDate(dynamo, tableName, date = d
 }
 
 /**
- * Ghi đè hệ số nhân theo món cho user trong ngày GMT+7.
+ * Ghi hệ số nhân theo món cho user trong ngày GMT+7 (replace theo tin mới nhất).
  * @param {import('@aws-sdk/client-dynamodb').DynamoDBClient} dynamo
  * @param {string} tableName
  * @param {string} userId
@@ -81,8 +81,7 @@ export async function mergeOrderOverridesForUser(
   if (!tableName || !userId || !Object.keys(newOverrides).length) return;
 
   const dateKey = date || dateKeyGmt7();
-  const existing = await getOrderOverridesForUser(dynamo, tableName, userId, dateKey);
-  const merged = { ...existing, ...newOverrides };
+  const replaced = nextOverridesAfterQtyMessage({}, newOverrides);
 
   await dynamo.send(
     new PutItemCommand({
@@ -91,7 +90,7 @@ export async function mergeOrderOverridesForUser(
         date: dateKey,
         user_id: userId,
         overrides: Object.fromEntries(
-          Object.entries(merged).map(([k, v]) => [String(k), v])
+          Object.entries(replaced).map(([k, v]) => [String(k), v])
         ),
         updated_at: new Date().toISOString(),
         last_message_ts: messageTs || '',

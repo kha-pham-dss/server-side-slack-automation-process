@@ -7,6 +7,7 @@ import {
   findQtyWithoutReaction,
   buildQtyDoubleCheckMessage,
   totalPortions,
+  nextOverridesAfterQtyMessage,
 } from './order-qty.js';
 
 const TODAY_DISHES = [
@@ -145,5 +146,22 @@ describe('double check món', () => {
     assert.match(text, /2x Gà rang/);
     assert.match(text, /:thirteen:/);
     assert.match(text, /chả cá/);
+  });
+});
+
+describe('nextOverridesAfterQtyMessage', () => {
+  it('replaces prior overrides instead of merging (menu-change stale index)', () => {
+    const existing = { 10: 2, 9: 2 };
+    const incoming = { 9: 3, 2: 2 };
+    assert.deepEqual(nextOverridesAfterQtyMessage(existing, incoming), { 9: 3, 2: 2 });
+  });
+
+  it('stale merge would inflate portions to 7; replace keeps 5', () => {
+    const existing = { 10: 2, 9: 2 };
+    const incoming = { 9: 3, 2: 2 };
+    const reacted = [2, 9];
+    const merged = { ...existing, ...incoming };
+    assert.equal(totalPortions(reacted, merged), 7);
+    assert.equal(totalPortions(reacted, nextOverridesAfterQtyMessage(existing, incoming)), 5);
   });
 });
