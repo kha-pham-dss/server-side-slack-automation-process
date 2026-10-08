@@ -7,7 +7,7 @@ Description: Slack dishes ordering - Option A (scheduled Lambdas only, reactions
 
 Globals:
   Function:
-    Runtime: nodejs20.x
+    Runtime: nodejs24.x
     Timeout: 60
     MemorySize: 256
     Architectures:
@@ -69,6 +69,21 @@ Resources:
         AttributeName: ttl
         Enabled: true
 
+  # Long-term per-dish order history (no TTL): ZaloSheetSummary writes at 11:00, PostMenu ranks photo menus.
+  DishPopularityTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: slack-dishes-dish-popularity
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: dish_key
+          AttributeType: S
+      KeySchema:
+        - AttributeName: dish_key
+          KeyType: HASH
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: false
+
   PostMenuFunction:
     Type: AWS::Serverless::Function
     Metadata:
@@ -77,11 +92,14 @@ Resources:
       FunctionName: slack-dishes-post-menu
       CodeUri: ../serverless/post-menu
       Handler: index.handler
-      Description: Runs at 9:30 GMT+7 (VNT); reads menu from DM, posts to Slack, stores message_ts + dish list in DynamoDB.
+      Description: Runs at 10:15 GMT+7 (VNT); reads menu from DM (text or photos via Gemini), posts to Slack, stores message_ts + dish list in DynamoDB.
+      # Photo menus: Gemini primary (~40s) + fallback model, each capped at 90s.
+      Timeout: 240
       Environment:
         Variables:
           TABLE_NAME: !Ref MenuMessageTable
           DISHES_TABLE_NAME: !Ref DishesMenuTable
+          DISH_POPULARITY_TABLE_NAME: !Ref DishPopularityTable
           PARAMETER_PREFIX: /slack-dishes
       Policies:
         - Version: '2012-10-17'
@@ -101,13 +119,18 @@ Resources:
               Resource:
                 - !GetAtt MenuMessageTable.Arn
                 - !GetAtt DishesMenuTable.Arn
+            - Effect: Allow
+              Action:
+                - dynamodb:Scan
+              Resource:
+                - !GetAtt DishPopularityTable.Arn
       Events:
         PostMenuSchedule:
           Type: Schedule
           Properties:
-            Schedule: cron(30 2 ? * MON-FRI *)
+            Schedule: cron(15 3 ? * MON-FRI *)
             Name: post-menu-daily
-            Description: Invoke PostMenu at 9:30 GMT+7 (VNT)
+            Description: Invoke PostMenu at 10:15 GMT+7 (VNT)
             Enabled: true
 
   EnsureMonthSheetFunction:
@@ -205,6 +228,11 @@ Resources:
                 - !GetAtt MenuMessageTable.Arn
                 - !GetAtt DishesMenuTable.Arn
                 - !GetAtt OrderOverridesTable.Arn
+            - Effect: Allow
+              Action:
+                - dynamodb:DeleteItem
+              Resource:
+                - !GetAtt OrderOverridesTable.Arn
 
   ZaloSheetSummaryFunction:
     Type: AWS::Serverless::Function
@@ -221,6 +249,7 @@ Resources:
           TABLE_NAME: !Ref MenuMessageTable
           DISHES_TABLE_NAME: !Ref DishesMenuTable
           ORDER_OVERRIDES_TABLE_NAME: !Ref OrderOverridesTable
+          DISH_POPULARITY_TABLE_NAME: !Ref DishPopularityTable
           ZALO_SUMMARY_CELL: 'S62'
       Policies:
         - Version: '2012-10-17'
@@ -241,6 +270,11 @@ Resources:
                 - !GetAtt MenuMessageTable.Arn
                 - !GetAtt DishesMenuTable.Arn
                 - !GetAtt OrderOverridesTable.Arn
+            - Effect: Allow
+              Action:
+                - dynamodb:UpdateItem
+              Resource:
+                - !GetAtt DishPopularityTable.Arn
       Events:
         ZaloSheetSummarySchedule:
           Type: Schedule
@@ -290,7 +324,7 @@ Resources:
             Schedule: cron(5/10 2-3 ? * MON-FRI *)
             Name: menu-images-sync-poll
             Description: Menu DM image poll every 10 min (window in Lambda)
-            Enabled: true
+            Enabled: false
 
   ControlChannelPostFunction:
     Type: AWS::Serverless::Function

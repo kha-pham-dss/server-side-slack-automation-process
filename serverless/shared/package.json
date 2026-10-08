@@ -21,6 +21,9 @@
     "./zalo-message.js": "./zalo-message.js",
     "./ssm-config.js": "./ssm-config.js",
     "./post-command.js": "./post-command.js",
-    "./control-channel-post-job.js": "./control-channel-post-job.js"
+    "./control-channel-post-job.js": "./control-channel-post-job.js",
+    "./dish-popularity.js": "./dish-popularity.js",
+    "./menu-selection.js": "./menu-selection.js",
+    "./menu-vision.js": "./menu-vision.js"
   }
 }

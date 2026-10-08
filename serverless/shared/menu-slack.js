@@ -23,9 +23,9 @@ export function buildMenuSlackBlocks(dishes, imageFileIds = []) {
       text: {
         type: 'mrkdwn',
         text: [
-          '4 món + 1 rau => 30k',
-          '5 món + 1 rau => 35k',
-          'Mặc định 30k, có thể react ít hơn 4 món, nhà bếp sẽ tự thêm các món còn lại.',
+          '3 món mặn + 1–2 món rau => 40k',
+          'Ăn ít => 35k, nhà bếp tự cân đối.',
+          'Mặc định 40k, có thể react ít món hơn, nhà bếp sẽ tự thêm các món còn lại.',
         ].join('\n'),
       },
     },
@@ -34,7 +34,7 @@ export function buildMenuSlackBlocks(dishes, imageFileIds = []) {
     { type: 'divider' },
     {
       type: 'section',
-      text: { type: 'mrkdwn', text: ':up: để upsize lên 35k' },
+      text: { type: 'mrkdwn', text: ':arrow_down: để giảm xuống 35k (ăn ít)' },
     },
     { type: 'divider' },
     {
@@ -81,7 +81,7 @@ export function buildMenuSlackTextFallback(dishes) {
     .slice(0, MAX_DISHES)
     .map((d) => (typeof d === 'object' && d?.name ? d.name : d))
     .join(', ');
-  return `Thực đơn hôm nay: ${names} — :up: upsize 35k — @Mr.Chef 2x tên món nếu cần 2+ phần`;
+  return `Thực đơn hôm nay: ${names} — :arrow_down: ăn ít 35k — @Mr.Chef 2x tên món nếu cần 2+ phần`;
 }
 
 export function menuBlocksNeedBotToken(blocks) {

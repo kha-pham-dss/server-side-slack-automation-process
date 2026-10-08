@@ -96,6 +96,7 @@ export {
   getOrderOverridesForUser,
   getOrderOverridesByUserForDate,
   mergeOrderOverridesForUser,
+  clearOrderOverridesForDate,
 } from './dynamo-order-overrides.js';
 
 export {
@@ -107,6 +108,7 @@ export {
   formatDishNamesWithQtyOverrides,
   userHasOrderContent,
   totalPortions,
+  isCleanupQtyCommand,
   nextOverridesAfterQtyMessage,
   findQtyWithoutReaction,
   buildQtyDoubleCheckMessage,
@@ -124,6 +126,9 @@ export {
   openDmChannelWithUser,
   fetchImageFileIdsFromDmThread,
   fetchLatestMenuDmSource,
+  collectLatestMenuImageFiles,
+  downloadSlackImage,
+  replyInDmThread,
   normalizeSlackTs,
   isSlackImMessage,
   isReplyUnderMenuDmThread,
@@ -137,6 +142,23 @@ export {
   uploadImageBufferToSlack,
   updateSlackMenuMessage,
 } from './menu-slack.js';
+
+export {
+  dishHistoryKey,
+  countPortionsByDishIndex,
+  recordDishPopularityForDate,
+  loadDishPopularity,
+} from './dish-popularity.js';
+
+export { DISH_CATEGORIES, RESERVED_NEW_DISH_SLOTS, selectMenuDishes } from './menu-selection.js';
+
+export {
+  DEFAULT_MENU_VISION_MODELS,
+  MENU_VISION_TIMEOUT_MS,
+  buildMenuVisionPrompt,
+  parseMenuVisionResponse,
+  extractMenuDishesFromImages,
+} from './menu-vision.js';
 
 export {
   ZALO_PHOTO_MSG_TYPES,

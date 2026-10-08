@@ -208,6 +208,19 @@ export function totalPortions(dishIndices = [], qtyOverrides = {}) {
 }
 
 /**
+ * Lệnh đặc biệt: `@Mr.Chef Cleanup` (chỉ maintainer menu-dm xử lý ở CollectOrders).
+ * Bỏ mention Slack rồi khớp đúng từ Cleanup (không phân biệt hoa thường).
+ * @param {string} text
+ */
+export function isCleanupQtyCommand(text) {
+  const stripped = String(text ?? '')
+    .replace(/<@[A-Z0-9]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return /^cleanup\.?$/i.test(stripped);
+}
+
+/**
  * Snapshot hệ số sau một tin @Mr.Chef: tin mới thay toàn bộ overrides trong ngày (không merge).
  * Merge cũ giữ index lệch sau khi đổi menu → cộng phần “ma” (vd. 7 món).
  * @param {Record<number, number>} _existing unused; giữ chỗ nếu caller còn truyền

@@ -8,6 +8,7 @@ import {
   buildQtyDoubleCheckMessage,
   totalPortions,
   nextOverridesAfterQtyMessage,
+  isCleanupQtyCommand,
 } from './order-qty.js';
 
 const TODAY_DISHES = [
@@ -163,5 +164,21 @@ describe('nextOverridesAfterQtyMessage', () => {
     const merged = { ...existing, ...incoming };
     assert.equal(totalPortions(reacted, merged), 7);
     assert.equal(totalPortions(reacted, nextOverridesAfterQtyMessage(existing, incoming)), 5);
+  });
+});
+
+describe('isCleanupQtyCommand', () => {
+  it('matches Cleanup with or without @mention', () => {
+    assert.equal(isCleanupQtyCommand('<@U0AE8AK7PNJ> Cleanup'), true);
+    assert.equal(isCleanupQtyCommand('cleanup'), true);
+    assert.equal(isCleanupQtyCommand('CLEANUP.'), true);
+    assert.equal(isCleanupQtyCommand('  <@U1>   Cleanup  '), true);
+  });
+
+  it('rejects non-command text', () => {
+    assert.equal(isCleanupQtyCommand('2x Cleanup'), false);
+    assert.equal(isCleanupQtyCommand('Cleanup giúp mình'), false);
+    assert.equal(isCleanupQtyCommand(''), false);
+    assert.equal(isCleanupQtyCommand('<@U1> 2x gà rang'), false);
   });
 });

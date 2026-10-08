@@ -1,4 +1,4 @@
-import { GetItemCommand, PutItemCommand, QueryCommand } from '@aws-sdk/client-dynamodb';
+import { DeleteItemCommand, GetItemCommand, PutItemCommand, QueryCommand } from '@aws-sdk/client-dynamodb';
 import { marshall, unmarshall } from '@aws-sdk/util-dynamodb';
 import { dateKeyGmt7, dynamoTtlFromDateKey, DYNAMO_TTL_ORDER_OVERRIDES_DAYS } from './time-constants.js';
 import { MIN_QTY_OVERRIDE, MAX_QTY_OVERRIDE, nextOverridesAfterQtyMessage } from './order-qty.js';
@@ -98,4 +98,26 @@ export async function mergeOrderOverridesForUser(
       }),
     })
   );
+}
+
+/**
+ * Xóa mọi bản ghi hệ số x2/x3… trong ngày (sau khi đổi menu).
+ * @param {import('@aws-sdk/client-dynamodb').DynamoDBClient} dynamo
+ * @param {string} tableName
+ * @param {string} [date]
+ * @returns {Promise<number>} số user bị xóa override
+ */
+export async function clearOrderOverridesForDate(dynamo, tableName, date = dateKeyGmt7()) {
+  if (!tableName) return 0;
+  const byUser = await getOrderOverridesByUserForDate(dynamo, tableName, date);
+  const userIds = Object.keys(byUser);
+  for (const userId of userIds) {
+    await dynamo.send(
+      new DeleteItemCommand({
+        TableName: tableName,
+        Key: { date: { S: date }, user_id: { S: userId } },
+      })
+    );
+  }
+  return userIds.length;
 }

@@ -193,17 +193,17 @@ export function buildZaloSummaryText(
     lines.push(formatOrderLine(name, order, dishes, defaultPrice, upPrice, qtyOverrides));
   }
 
-  let count30k = 0;
-  let count35k = 0;
+  let defaultPriceCount = 0;
+  let upPriceCount = 0;
   for (const order of Object.values(ordersByUserId)) {
     if (!order.dishIndices.length) continue;
-    if (order.price === upPrice) count35k++;
-    else count30k++;
+    if (order.price === upPrice) upPriceCount++;
+    else defaultPriceCount++;
   }
 
   const totalParts = [];
-  if (count30k > 0) totalParts.push(`${count30k} suất 30k`);
-  if (count35k > 0) totalParts.push(`${count35k} suất 35k`);
+  if (defaultPriceCount > 0) totalParts.push(`${defaultPriceCount} suất ${formatPriceLabel(defaultPrice)}`);
+  if (upPriceCount > 0) totalParts.push(`${upPriceCount} suất ${formatPriceLabel(upPrice)}`);
   if (totalParts.length) {
     lines.push(`Tổng ${totalParts.join(', ')} nhé ạ`);
   }
@@ -212,7 +212,7 @@ export function buildZaloSummaryText(
 }
 
 /**
- * Slack reactions.get → orders + :up: user set.
+ * Slack reactions.get → orders + user set của reaction giá ({@link UP_EMOJI}).
  * @returns {{ orders: Array<{ emoji: string; dish_index: number; user_ids: string[] }>; upUserIds: Set<string> }}
  */
 export function parseReactionsFromSlackMessage(reactions, botUserId = null) {

@@ -2,12 +2,16 @@
  * CollectOrders Lambda — chỉ invoke từ Slack Events khi user @Mr.Chef trong thread menu hôm nay.
  * Parse hệ số nhân (`2x gà rang`, `x3 gà rang`, `gà rang x4`…) từ tin reply → lưu DynamoDB;
  * đọc reactions + overrides → sheet + S62; ping lại user nếu hệ số không khớp món đã react.
+ * Maintainer (menu-dm-user): `@Mr.Chef Cleanup` → xóa mọi qty override trong ngày rồi sync lại sheet.
  */
 
 import { DynamoDBClient, GetItemCommand } from '@aws-sdk/client-dynamodb';
 import { unmarshall } from '@aws-sdk/util-dynamodb';
 import { getDishesMenuForDate } from '@slack-dishes/shared/dynamo-dishes.js';
-import { mergeOrderOverridesForUser } from '@slack-dishes/shared/dynamo-order-overrides.js';
+import {
+  mergeOrderOverridesForUser,
+  clearOrderOverridesForDate,
+} from '@slack-dishes/shared/dynamo-order-overrides.js';
 import { ensureCurrentMonthSheet } from '@slack-dishes/shared/ensure-month-sheet.js';
 import { getSheetsClient } from '@slack-dishes/shared/sheets.js';
 import { loadConfigFromParameterStore } from '@slack-dishes/shared/ssm-config.js';
@@ -21,7 +25,9 @@ import {
   parseQtyRequestsFromMessage,
   findQtyWithoutReaction,
   buildQtyDoubleCheckMessage,
+  isCleanupQtyCommand,
 } from '@slack-dishes/shared/order-qty.js';
+import { MENU_DM_USER_ID_DEFAULT } from '@slack-dishes/shared/menu-dm.js';
 import {
   CACHE_TTL_MS,
   dateKeyGmt7,
@@ -121,6 +127,68 @@ export async function handler(event) {
     const triggeringUserId = event?.userId;
     const messageText = event?.messageText || '';
     const dateKey = dateKeyGmt7();
+
+    if (isCleanupQtyCommand(messageText)) {
+      const menuDmUserId = (config['menu-dm-user-id'] || MENU_DM_USER_ID_DEFAULT).trim();
+      if (!triggeringUserId || triggeringUserId !== menuDmUserId) {
+        console.warn('CollectOrders: Cleanup ignored — not menu-dm user', {
+          userId: triggeringUserId,
+          menuDmUserId,
+        });
+        return { ok: true, skipped: true, reason: 'cleanup_unauthorized' };
+      }
+      if (!ORDER_OVERRIDES_TABLE_NAME) {
+        console.warn('CollectOrders: Cleanup skipped — ORDER_OVERRIDES_TABLE_NAME not set');
+        return { ok: true, skipped: true, reason: 'cleanup_no_overrides_table' };
+      }
+
+      const deletedUsers = await clearOrderOverridesForDate(
+        dynamo,
+        ORDER_OVERRIDES_TABLE_NAME,
+        dateKey
+      );
+      console.log('CollectOrders: Cleanup cleared qty overrides', {
+        date: dateKey,
+        deletedUsers,
+        by: triggeringUserId,
+      });
+
+      const syncResult = await syncOrdersToSheetAndSummary({
+        config,
+        sheets,
+        sheetId,
+        sheetName,
+        channelId: channel_id,
+        messageTs: message_ts,
+        botToken,
+        dynamo,
+        dishesTableName: DISHES_TABLE_NAME,
+        orderOverridesTableName: ORDER_OVERRIDES_TABLE_NAME,
+        dishes,
+      });
+
+      if (event?.replyChannelId && event?.replyTs) {
+        await addReactionToMessage(botToken, event.replyChannelId, event.replyTs, 'white_check_mark');
+      }
+      try {
+        await postReplyInThread(
+          botToken,
+          channel_id,
+          message_ts,
+          `Đã xóa ${deletedUsers} bản ghi hệ số x2/x3 ngày ${dateKey}.`
+        );
+      } catch (err) {
+        console.warn('CollectOrders: Cleanup ack reply failed', err);
+      }
+
+      return {
+        ok: true,
+        cleanup: true,
+        date: dateKey,
+        deleted_users: deletedUsers,
+        order_count: Object.keys(syncResult.ordersByUserId || {}).length,
+      };
+    }
 
     let savedOverrides = null;
     /** Vế có hệ số nhưng tên món không khớp menu hôm nay → nhắc user kiểm tra lại. */

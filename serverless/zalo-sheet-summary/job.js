@@ -7,6 +7,7 @@ import { DynamoDBClient, GetItemCommand } from '@aws-sdk/client-dynamodb';
 import { unmarshall } from '@aws-sdk/util-dynamodb';
 import { Zalo, ThreadType } from 'zca-js';
 import { dateKeyGmt7 } from '@slack-dishes/shared/time-constants.js';
+import { countPortionsByDishIndex, recordDishPopularityForDate } from '@slack-dishes/shared/dish-popularity.js';
 import {
   getSheetsClient,
   aggregateOrderSummaryFromReactions,
@@ -35,6 +36,19 @@ async function getTodayMenuRow(tableName) {
   );
   if (!res.Item) return null;
   return unmarshall(res.Item);
+}
+
+/** Lịch sử để PostMenu xếp hạng món — side effect, không được chặn sheet / Zalo. */
+async function recordDishPopularity(agg) {
+  const tableName = (process.env.DISH_POPULARITY_TABLE_NAME || '').trim();
+  if (!tableName) return;
+  try {
+    const portionsByIndex = countPortionsByDishIndex(agg.ordersByUserId, agg.overridesByUserId);
+    const result = await recordDishPopularityForDate(dynamo, tableName, agg.dishes, portionsByIndex);
+    console.log('Zalo sheet summary: dish popularity recorded', result);
+  } catch (err) {
+    console.warn('Zalo sheet summary: dish popularity record failed', err?.message || err);
+  }
 }
 
 /**
@@ -120,6 +134,9 @@ export async function runFromConfig(config) {
     dishes: agg.dishes,
     overridesByUserId: agg.overridesByUserId,
   });
+
+  // Ngày không ai đặt (nghỉ lễ, quên menu…) không phản ánh độ thích món.
+  if (!noOrders) await recordDishPopularity(agg);
 
   if (ZALO_SEND_DISABLED) {
     console.log(
